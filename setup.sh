@@ -64,6 +64,11 @@ if command -v gemini &>/dev/null || [ -d "$HOME/.config/gemini" ]; then
   link_skills "$HOME/.config/gemini/skills" "Gemini CLI"
 fi
 
+# ── OpenCode ──────────────────────────────────────────────────────────────────
+if command -v opencode &>/dev/null || [ -d "$HOME/.config/opencode" ]; then
+  link_skills "$HOME/.config/opencode/skills" "OpenCode"
+fi
+
 # ── Hermes ────────────────────────────────────────────────────────────────────
 if command -v hermes &>/dev/null || [ -d "$HOME/.hermes" ]; then
   HERMES_CONFIG="$HOME/.hermes/config.yaml"

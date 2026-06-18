@@ -15,13 +15,20 @@ description: >
 Receives a bug description, finds the relevant file using the repository
 knowledge graph, applies the minimal fix, and opens a pull request for review.
 
+Follow these steps in order. Do not skip the graph step because the bug looks
+simple — building it once and reusing it is the whole point; skipping it just
+means the next job pays to rebuild what this one should have left behind.
+
 ## Prerequisites
 
 - `graphify` installed: `pip install graphifyy`
 - `gh` CLI authenticated: `gh auth login`
 - `git` configured with access to the repository
-- A Gemini API key set as `GEMINI_API_KEY` (free tier at aistudio.google.com)
-  — only needed if the repo contains docs, images, or non-code files
+- An LLM API key for the configured backend, available in the environment —
+  only needed if the repo contains docs, images, or non-code files. Use
+  whichever provider is already configured for this deployment; do not
+  substitute a different provider's key (see `references/edge-cases.md`,
+  2026-06-08, for why that fails).
 
 ## Step 1 — Gather information
 
@@ -34,40 +41,73 @@ Ask the developer for:
 
 Do not proceed without the repository name and bug description.
 
-## Step 2 — Clone or pull the repository
+## Step 2 — Clone or pull the repository (persistent location)
+
+Repos are cloned to a **persistent** path, not `/tmp` — this lets the graph
+built in Step 3 be reused across jobs instead of rebuilt from scratch every
+single time.
 
 ```bash
-# Clone if not present locally
-git clone https://github.com/<owner>/<repo>.git /tmp/agent-repos/<repo>
+REPO_DIR=/app/data/repos/<owner>__<repo>
 
-# Or pull latest if already cloned
-git -C /tmp/agent-repos/<repo> checkout main
-git -C /tmp/agent-repos/<repo> pull origin main
+if [ -d "$REPO_DIR/.git" ]; then
+  # Already cloned — pull latest rather than cloning fresh
+  git -C "$REPO_DIR" checkout main
+  git -C "$REPO_DIR" pull origin main
+else
+  mkdir -p /app/data/repos
+  git clone https://github.com/<owner>/<repo>.git "$REPO_DIR"
+fi
 ```
 
-Always start from a clean, up-to-date main branch.
-
-## Step 3 — Build the knowledge graph
+Always end this step on a clean, up-to-date main branch. Record the current
+HEAD sha — Step 3 needs it to decide whether an existing graph is stale:
 
 ```bash
-graphify extract /tmp/agent-repos/<repo> \
-  --output /tmp/agent-repos/<repo>/graphify-out \
-  --no-browser
+CURRENT_SHA=$(git -C "$REPO_DIR" rev-parse HEAD)
 ```
 
-If extraction fails because non-code files (docs, images) need semantic
-analysis, pass `GEMINI_API_KEY`:
+## Step 3 — Build or reuse the knowledge graph (persistent, staleness-checked)
+
+The graph lives outside the repo clone, at a fixed path keyed by repo, so it
+survives across jobs and container restarts.
 
 ```bash
-GEMINI_API_KEY=<key> graphify extract /tmp/agent-repos/<repo> \
-  --output /tmp/agent-repos/<repo>/graphify-out \
-  --no-browser
+GRAPH_DIR=/app/data/graphs/<owner>__<repo>
+GRAPH_FILE="$GRAPH_DIR/graphify-out/graph.json"
+SHA_FILE="$GRAPH_DIR/built-at-sha.txt"
 ```
+
+**Reuse check — always do this before extracting anything:**
+
+```bash
+if [ -f "$GRAPH_FILE" ] && [ -f "$SHA_FILE" ] && \
+   [ "$(cat "$SHA_FILE")" = "$CURRENT_SHA" ]; then
+  echo "Graph is fresh (built at current HEAD) — reusing $GRAPH_FILE"
+  # Skip directly to Step 4. Do not re-extract.
+fi
+```
+
+Only if that check fails (no graph yet, or the repo has moved since the graph
+was last built) — rebuild:
+
+```bash
+mkdir -p "$GRAPH_DIR"
+graphify extract "$REPO_DIR" --output "$GRAPH_DIR/graphify-out" --no-browser
+echo "$CURRENT_SHA" > "$SHA_FILE"
+```
+
+If extraction fails needing semantic analysis of non-code files, the
+configured backend's API key should already be present in the environment —
+do not hardcode a specific provider's key here, and do not try a different
+provider's key as a workaround (see `references/edge-cases.md`, 2026-06-08).
+If it still fails, report the exact error rather than guessing at a fix.
 
 If graphify reports files it cannot process, remove them from the local clone
 before extracting — they are working copies only, the remote repo is untouched.
 
 A successful extraction prints:
+
 ```
 [graphify extract] wrote graph.json: N nodes, M edges
 ```
@@ -76,7 +116,7 @@ A successful extraction prints:
 
 ```bash
 graphify query "<bug description>" \
-  --graph /tmp/agent-repos/<repo>/graphify-out/graph.json \
+  --graph "$GRAPH_FILE" \
   --budget 3000
 ```
 
@@ -105,7 +145,7 @@ Please specify the file path directly."
 ## Step 5 — Read and understand the file
 
 ```bash
-cat /tmp/agent-repos/<repo>/<target-file-path>
+cat "$REPO_DIR/<target-file-path>"
 ```
 
 Read the full file. Understand what it does. Identify the specific line or value
@@ -114,18 +154,32 @@ that contains the bug based on the description.
 Also read the last 5 commits touching this file:
 
 ```bash
-git -C /tmp/agent-repos/<repo> log -5 --oneline -- <target-file-path>
+git -C "$REPO_DIR" log -5 --oneline -- <target-file-path>
 ```
 
 Recent commits often reveal what changed and why the bug was introduced.
 
-## Step 6 — Determine the fix
+## Step 6 — Check for applicable convention skills
+
+Before deciding on the fix, check whether a more specific skill governs this
+change — do not rely on general judgment alone when a skill already encodes
+the project's actual conventions:
+
+- Editing TypeScript? Load `typescript-conventions`.
+- Editing a SvelteKit/webapp feature? Load `webapp-conventions`.
+- Adding or modifying an ESLint rule? Load `eslint-rule-author`.
+
+If one applies, follow its conventions for the fix below. If none apply,
+proceed with Step 7 using only this skill's own guardrails.
+
+## Step 7 — Determine the fix
 
 The fix must be:
 
 - **Minimal** — change only what the bug description identifies.
 - **Surgical** — one value, one line, one file whenever possible.
 - **Correct** — verify the fix makes sense by re-reading the file after applying it.
+- **Consistent** with any convention skill loaded in Step 6.
 
 If you notice other issues in the file, do NOT fix them. Note them in the PR
 description only.
@@ -133,7 +187,7 @@ description only.
 If you cannot determine the correct fix with confidence, report back to the
 developer with what you found and ask for clarification. Do not guess.
 
-## Step 7 — Create the branch
+## Step 8 — Create the branch
 
 Branch naming convention:
 
@@ -147,34 +201,34 @@ hyphenated, alphanumeric only.
 Example: `agent/fix/supabase-url-wrong-20260608`
 
 ```bash
-git -C /tmp/agent-repos/<repo> checkout -b agent/fix/<slug>-<date>
+git -C "$REPO_DIR" checkout -b agent/fix/<slug>-<date>
 ```
 
-## Step 8 — Apply the fix
+## Step 9 — Apply the fix
 
 Edit the file directly. Write the complete corrected content.
 
 ```bash
 # Verify the change looks right before committing
-git -C /tmp/agent-repos/<repo> diff <target-file-path>
+git -C "$REPO_DIR" diff <target-file-path>
 ```
 
 The diff must show only the minimal change. If it shows unrelated changes,
 revert and redo.
 
-## Step 9 — Commit
+## Step 10 — Commit
 
 Stage only the file you changed. Never `git add .`.
 
 ```bash
-git -C /tmp/agent-repos/<repo> add <target-file-path>
-git -C /tmp/agent-repos/<repo> commit -m "[agent] fix: <bug description, max 60 chars>"
+git -C "$REPO_DIR" add <target-file-path>
+git -C "$REPO_DIR" commit -m "[agent] fix: <bug description, max 60 chars>"
 ```
 
-## Step 10 — Push and open the PR
+## Step 11 — Push and open the PR
 
 ```bash
-git -C /tmp/agent-repos/<repo> push origin agent/fix/<slug>-<date>
+git -C "$REPO_DIR" push origin agent/fix/<slug>-<date>
 
 gh pr create \
   --repo <owner>/<repo> \
@@ -194,6 +248,8 @@ gh pr create \
 
 **File changed:** `<target-file-path>`
 **Files read but not changed:** <list other files inspected, or "none">
+**Knowledge graph:** <reused existing graph / rebuilt — state which>
+**Convention skill applied:** <name, or "none applicable">
 
 **Confidence:** <high / medium / low>
 
@@ -208,7 +264,20 @@ PR_BODY
 gh pr edit <pr-number> --repo <owner>/<repo> --add-reviewer <reviewer>
 ```
 
-## Step 11 — Report back
+**Verifying the PR:** After creation, confirm it looks right:
+
+```bash
+# Use --json for reliable output (plain gh pr view can fail with
+# GraphQL deprecation warnings on newer repos)
+gh pr view <pr-number> --repo <owner>/<repo> --json title,state,url,reviewRequests
+```
+
+**Reviewer edge case:** If `gh pr edit --add-reviewer` returns HTTP 422
+("Review cannot be requested from pull request author"), the authenticated gh
+user is the same as the requested reviewer. GitHub blocks self-review — note
+this in the Step 12 report so the developer knows to assign a different reviewer.
+
+## Step 12 — Report back
 
 Tell the developer:
 
@@ -216,6 +285,8 @@ Tell the developer:
 ✓ PR opened: <pr-url>
   Branch:    agent/fix/<slug>-<date>
   Changed:   <target-file-path>
+  Graph:     <reused / rebuilt>
+  Skills used: fix-bug<, + any convention skill from Step 6>
   Summary:   <one sentence>
   Confidence: <high/medium/low>
 ```
@@ -232,25 +303,19 @@ reviewer knows where to focus.
 - Touch environment variables, secrets, or `.env` files.
 - Open more than one PR per bug report.
 - Retry more than twice if something fails — report the failure instead.
+- Substitute a different provider's API key when the configured one fails for
+  graphify — report the failure instead (see `references/edge-cases.md`).
 
 ## Failure modes
 
 | Condition | Behaviour |
 |---|---|
 | Repository not found | Report and stop. Ask developer to verify the repo name. |
-| graphify extract fails | Try removing non-code files from clone; retry once. If still fails, report. |
+| graphify extract fails | Report the exact error. Do not swap to a different provider's key. |
 | Knowledge graph returns no results | Retry with broader query once. If still empty, ask developer for file path. |
 | Cannot determine correct fix | Report findings, ask for clarification. Do not guess. |
 | Push rejected | Report and stop. Do not force-push. |
 | PR creation fails | Report the error with the exact gh output. |
-
-## Self-improvement
-
-When you encounter an edge case not covered by this skill — for example, a new
-type of file that graphify misclassifies, a repository layout that requires a
-different query strategy, or a bug pattern that needed a different approach —
-append it to `references/edge-cases.md` under a new dated entry. Do not modify
-any other section of this skill without explicit instruction.
 
 ## See also
 
@@ -260,3 +325,11 @@ any other section of this skill without explicit instruction.
   naming, PR format, and guardrails reference
 - [`references/edge-cases.md`](./references/edge-cases.md) — known edge cases
   and how to handle them
+
+## Self-improvement
+
+If you encounter an edge case not covered by this skill:
+
+1. Append it to `references/edge-cases.md` under a new dated entry
+2. Format: date, condition, and exact handling steps used
+3. Do not modify any other section of this skill
