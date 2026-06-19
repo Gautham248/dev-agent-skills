@@ -112,6 +112,7 @@ If graphify reports files it cannot process, remove them from the local clone
 before extracting — they are working copies only, the remote repo is untouched.
 
 A successful extraction prints:
+
 ```
 [graphify extract] wrote graph.json: N nodes, M edges
 ```
@@ -333,6 +334,7 @@ reviewer knows where to focus.
 ## Self-improvement
 
 If you encounter an edge case not covered by this skill:
+
 1. Append it to `references/edge-cases.md` under a new dated entry
 2. Format: date, condition, and exact handling steps used
 3. Do not modify any other section of this skill
