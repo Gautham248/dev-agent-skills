@@ -93,9 +93,14 @@ was last built) — rebuild:
 
 ```bash
 mkdir -p "$GRAPH_DIR"
-graphify extract "$REPO_DIR" --output "$GRAPH_DIR/graphify-out" --no-browser
+graphify extract "$REPO_DIR" --output "$GRAPH_DIR/graphify-out" --no-browser --backend openai
 echo "$CURRENT_SHA" > "$SHA_FILE"
 ```
+
+`--backend openai` here is not real OpenAI — `OPENAI_BASE_URL`/`OPENAI_MODEL`
+are configured to point this at the same OpenCode Go endpoint everything else
+in this deployment uses, so graphify's semantic extraction runs on the same
+provider as the rest of the agent's work, not a second one.
 
 If extraction fails needing semantic analysis of non-code files, the
 configured backend's API key should already be present in the environment —
