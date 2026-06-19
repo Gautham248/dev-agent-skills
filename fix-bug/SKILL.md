@@ -93,7 +93,7 @@ was last built) — rebuild:
 
 ```bash
 mkdir -p "$GRAPH_DIR"
-graphify extract "$REPO_DIR" --output "$GRAPH_DIR/graphify-out" --no-browser --backend openai
+graphify extract "$REPO_DIR" --out "$GRAPH_DIR" --no-browser --backend openai
 echo "$CURRENT_SHA" > "$SHA_FILE"
 ```
 
