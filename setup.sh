@@ -28,6 +28,171 @@ SKILL_COUNT=${#SKILL_FOLDERS[@]}
 echo "Found $SKILL_COUNT skills: $(basename -a "${SKILL_FOLDERS[@]}" | tr '\n' ' ')"
 echo ""
 
+# ── Clarification protocol injection ──────────────────────────────────────────
+#
+# Every skill gets a standing "clarify, then confirm, before acting" step
+# injected automatically, right after its YAML frontmatter — so new skills
+# get it for free on the next `bash setup.sh` after a `git pull`, with no
+# manual per-skill editing required. The actual rules live in ONE place
+# (CLARIFICATION-PROTOCOL.md, this repo's root) — this just wires a pointer
+# to it into every skill, idempotently. Re-running this is always safe: any
+# existing managed block is stripped and rebuilt fresh (so the absolute path
+# self-corrects if this repo was re-cloned somewhere else on this machine).
+#
+# This is deliberately a SKILL.md-level mechanism, not just an AGENTS.md
+# rule — AGENTS.md is genuinely cross-tool now (Codex, Claude Code, OpenCode,
+# Gemini CLI all read it), but Hermes does not appear to, and a SKILL.md-
+# embedded instruction is the one thing every harness sees identically,
+# regardless of whether it also honors AGENTS.md.
+
+inject_clarification_protocol() {
+  local protocol_path="$SKILLS_DIR/CLARIFICATION-PROTOCOL.md"
+
+  if [ ! -f "$protocol_path" ]; then
+    echo "  ⚠️  CLARIFICATION-PROTOCOL.md not found at $protocol_path — skipping injection for all skills."
+    return
+  fi
+
+  local begin_marker="<!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->"
+  local end_marker="<!-- END dev-agent-skills clarification protocol -->"
+  local injected=0
+  local refreshed=0
+  local skipped=0
+
+  for skill_dir in "${SKILL_FOLDERS[@]}"; do
+    local skill_md="${skill_dir}SKILL.md"
+    local skill_name
+    skill_name=$(basename "$skill_dir")
+    [ -f "$skill_md" ] || continue
+
+    local had_block="false"
+    if grep -qF "$begin_marker" "$skill_md"; then
+      had_block="true"
+    fi
+
+    # Strip any existing managed block (exact-line match, no regex — avoids
+    # any escaping headaches with sed over a marker containing parentheses).
+    local stripped
+    stripped=$(mktemp)
+    awk -v b="$begin_marker" -v e="$end_marker" '
+      $0==b {skip=1; next}
+      $0==e {skip=0; next}
+      skip==1 {next}
+      {print}
+    ' "$skill_md" > "$stripped"
+
+    # Frontmatter is delimited by the first two lines that are exactly "---".
+    local second_dash
+    second_dash=$(grep -n '^---$' "$stripped" | head -2 | tail -1 | cut -d: -f1)
+
+    if [ -z "$second_dash" ]; then
+      echo "  ⚠️  $skill_name: SKILL.md has no recognizable YAML frontmatter — left untouched. Add frontmatter (name/description) for this to apply."
+      rm -f "$stripped"
+      skipped=$((skipped + 1))
+      continue
+    fi
+
+    # Piped through `cat -s` (squeeze repeated blank lines to one) as a final
+    # normalization step — without this, re-running setup.sh repeatedly
+    # (its whole documented purpose) accumulates one extra blank line per
+    # run forever, since each strip-then-reinsert cycle leaves the
+    # previous run's spacing behind. Confirmed by testing: blank-line count
+    # grew from a handful to 11 after just 4 runs without this. Minor side
+    # effect: any intentional double-blank-line spacing elsewhere in a
+    # skill's body also gets collapsed to single — acceptable, since
+    # markdown renders that identically anyway.
+    {
+      head -n "$second_dash" "$stripped"
+      echo ""
+      echo "$begin_marker"
+      echo "Before doing anything else in this skill, read and follow the clarification protocol at:"
+      echo "$protocol_path"
+      echo "$end_marker"
+      echo ""
+      tail -n "+$((second_dash + 1))" "$stripped"
+    } | cat -s > "$skill_md"
+
+    rm -f "$stripped"
+
+    if [ "$had_block" = "true" ]; then
+      refreshed=$((refreshed + 1))
+    else
+      injected=$((injected + 1))
+    fi
+  done
+
+  local summary="  ✓ Clarification protocol — injected into $injected skill(s), refreshed in $refreshed"
+  if [ "$skipped" -gt 0 ]; then
+    summary="$summary, skipped $skipped (no frontmatter)"
+  fi
+  echo "$summary"
+}
+
+inject_clarification_protocol
+echo ""
+
+# ── OpenCode global config (permission + standing rules) ─────────────────────
+#
+# Folds today's manual debugging session into the one-command setup: the
+# skill permission, a softer guardrail on subagent dispatch (task: "ask" —
+# see CLARIFICATION-PROTOCOL.md / chat history for why plain instruction
+# wording alone hit a ceiling), and the standing "load a skill first" rule —
+# all wired into the GLOBAL OpenCode config, not the user's own project or
+# personal AGENTS.md, which is never touched. Uses jq to merge safely with
+# whatever's already in opencode.json (confirmed necessary: a real machine
+# tested today already had unrelated keys — $schema, agent, mode, plugin,
+# command, username — that a naive overwrite would have destroyed). Falls
+# back to printing the exact snippet to add by hand if jq isn't installed,
+# rather than risking a fragile non-jq JSON edit.
+configure_opencode_global() {
+  if ! command -v opencode &>/dev/null && [ ! -d "$HOME/.config/opencode" ]; then
+    return  # OpenCode isn't installed/used on this machine — nothing to do
+  fi
+
+  local standing_rules_path="$SKILLS_DIR/AGENT-STANDING-RULES.md"
+  if [ ! -f "$standing_rules_path" ]; then
+    echo "  ⚠️  AGENT-STANDING-RULES.md not found at $standing_rules_path — skipping OpenCode global config."
+    return
+  fi
+
+  local global_dir="$HOME/.config/opencode"
+  local config_path="$global_dir/opencode.json"
+  mkdir -p "$global_dir"
+
+  if ! command -v jq &>/dev/null; then
+    echo "  ⚠️  OpenCode global config — jq not found, cannot safely merge into $config_path."
+    echo "      Add this manually (merge with whatever is already there, don't just overwrite it):"
+    echo "      { \"permission\": { \"skill\": { \"*\": \"allow\" }, \"task\": \"ask\", \"external_directory\": { \"$SKILLS_DIR/*\": \"allow\" } }, \"instructions\": [\"$standing_rules_path\"] }"
+    return
+  fi
+
+  if [ ! -f "$config_path" ]; then
+    echo '{}' > "$config_path"
+  fi
+
+  local tmp
+  tmp=$(mktemp)
+  jq --arg instr "$standing_rules_path" --arg skillsglob "$SKILLS_DIR/*" '
+    .permission = (.permission // {}) |
+    .permission.skill = (.permission.skill // {}) |
+    .permission.skill["*"] = "allow" |
+    .permission.task = (.permission.task // "ask") |
+    .permission.external_directory = (
+      if (.permission.external_directory | type) == "object" then .permission.external_directory
+      elif (.permission.external_directory | type) == "string" then { ("*"): .permission.external_directory }
+      else {}
+      end
+    ) |
+    .permission.external_directory[$skillsglob] = "allow" |
+    .instructions = ((.instructions // []) + [$instr] | unique)
+  ' "$config_path" > "$tmp" && mv "$tmp" "$config_path"
+
+  echo "  ✓ OpenCode global config — $config_path (permission.skill=allow; permission.task=ask if not already set; $SKILLS_DIR pre-approved for external_directory access; standing rules wired via instructions[])"
+}
+
+configure_opencode_global
+echo ""
+
 link_skills() {
   local target_dir="$1"
   local agent_name="$2"
@@ -64,6 +229,16 @@ if command -v gemini &>/dev/null || [ -d "$HOME/.config/gemini" ]; then
   link_skills "$HOME/.config/gemini/skills" "Gemini CLI"
 fi
 
+# ── OpenCode (global skills dir) ──────────────────────────────────────────────
+#
+# This is the real, primary mechanism for OpenCode — same pattern as the
+# three blocks above, always attempted regardless of the current working
+# directory. (See the portable .agents/skills block below for why that one
+# is NOT a reliable substitute for this.)
+if command -v opencode &>/dev/null || [ -d "$HOME/.config/opencode" ]; then
+  link_skills "$HOME/.config/opencode/skills" "OpenCode"
+fi
+
 # ── Hermes ────────────────────────────────────────────────────────────────────
 if command -v hermes &>/dev/null || [ -d "$HOME/.hermes" ]; then
   HERMES_CONFIG="$HOME/.hermes/config.yaml"
@@ -92,10 +267,17 @@ YAML
   fi
 fi
 
-# ── Portable .agents/skills (Cursor, OpenCode, any agent) ────────────────────
+# ── Portable .agents/skills (Cursor, or any agent that reads this convention) ─
+#
+# NOTE: this only fires if run from a directory that ALREADY has .agents/,
+# .cursor/rules, or .opencode.json present — which means it does nothing
+# when run the normal way (cloning dev-agent-skills and running setup.sh
+# from inside it). It's a best-effort extra for people who instead run this
+# script from inside their actual project directory. For OpenCode
+# specifically, do not rely on this block — use the global block above.
 if [ -d ".agents" ] || [ -f ".cursor/rules" ] || [ -f ".opencode.json" ]; then
-  link_skills ".agents/skills" "Portable (.agents/skills)"
+  link_skills ".agents/skills" "Portable (.agents/skills, project-local)"
 fi
 
 echo ""
-echo "Done. To pick up new skills after a git pull, run: bash setup.sh"
+echo "Done. To pick up new skills (and refresh the clarification protocol) after a git pull, run: bash setup.sh"

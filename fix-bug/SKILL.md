@@ -3,12 +3,19 @@ name: fix-bug
 description: >
   Use when a developer reports a bug in a GitHub repository and wants an
   automated fix — phrases like "fix this bug", "there's an error in production",
-  "something is broken in <repo>", or "open a PR to fix <issue>". Queries the
-  repository's knowledge graph to find the relevant file, applies a minimal
-  targeted fix, commits it on a new branch, opens a pull request, and notifies
-  the developer. Never merges. Never deletes files. Never touches more than what
-  the bug report describes.
+  "something is broken in <repo>", or "open a PR to fix <issue>". Also use for
+  the same kind of bug report in a local, not-yet-GitHub-connected repository —
+  the clarification and investigation steps still apply; only the clone/PR
+  mechanics differ (see Step 0). Queries the repository's knowledge graph to
+  find the relevant file, applies a minimal targeted fix, commits it on a new
+  branch, opens a pull request, and notifies the developer. Never merges.
+  Never deletes files. Never touches more than what the bug report describes.
 ---
+
+<!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->
+Before doing anything else in this skill, read and follow the clarification protocol at:
+/home/gautham/10xMinds/AI-Dev-Agent/dev-agent-skills/CLARIFICATION-PROTOCOL.md
+<!-- END dev-agent-skills clarification protocol -->
 
 # Fix bug
 
@@ -30,18 +37,48 @@ means the next job pays to rebuild what this one should have left behind.
   substitute a different provider's key (see `references/edge-cases.md`,
   2026-06-08, for why that fails).
 
+## Step 0 — Determine the operating context
+
+Before anything else: are you already running inside the target repository's
+own working directory (a teammate's local checkout), or are you the dev-agent
+service operating on a separate, persistent clone
+(`/app/data/repos/<owner>__<repo>`)?
+
+- **Already inside the repo's working directory:** skip Step 2's clone step
+  entirely — work directly in the current directory, no separate clone.
+  Confirm a git repository actually exists first
+  (`git rev-parse --is-inside-work-tree`).
+- **No git repository here at all:** stop and say so directly to the user.
+  Ask whether to proceed without any git/PR steps at all (edit files in place
+  only — no branch, no commit, no PR) or to initialize git first. Do not
+  silently invent your own workflow around this mismatch — surfacing it is
+  exactly what the clarification protocol is for, not something to route
+  around quietly.
+- **You ARE the dev-agent service** (operating on the known persistent-clone
+  path): follow Step 2 as written, unchanged.
+
+This decision determines how much of Steps 2–4 and 8–11 below actually apply.
+Say explicitly which mode you're in before proceeding, so the developer can
+correct you if you guessed wrong.
+
 ## Step 1 — Gather information
 
 Ask the developer for:
 
-1. **Repository** — `owner/repo` format (e.g. `Gautham248/edpb-docs-clone`)
+1. **Repository** — `owner/repo` format (e.g. `Gautham248/edpb-docs-clone`) —
+   only if you're NOT already inside the working directory per Step 0; if you
+   are, you already know which repo this is.
 2. **Bug description** — what is wrong, where it was noticed, any error messages
 3. **Environment** — production / staging / local
-4. **Reviewer** — GitHub username to assign on the PR (default: the reporter)
+4. **Reviewer** — GitHub username to assign on the PR (default: the reporter) —
+   only applicable if a PR will actually be opened (see Step 0)
 
-Do not proceed without the repository name and bug description.
+Do not proceed without the bug description.
 
 ## Step 2 — Clone or pull the repository (persistent location)
+
+**Only applies in dev-agent-service mode (see Step 0).** If you're already
+inside the repository's own working directory, skip this step entirely.
 
 Repos are cloned to a **persistent** path, not `/tmp` — this lets the graph
 built in Step 3 be reused across jobs instead of rebuilt from scratch every
@@ -156,7 +193,8 @@ cat "$REPO_DIR/<target-file-path>"
 Read the full file. Understand what it does. Identify the specific line or value
 that contains the bug based on the description.
 
-Also read the last 5 commits touching this file:
+Also read the last 5 commits touching this file (if a git history exists —
+skip this if Step 0 determined there is no git repository here):
 
 ```bash
 git -C "$REPO_DIR" log -5 --oneline -- <target-file-path>
@@ -194,6 +232,10 @@ developer with what you found and ask for clarification. Do not guess.
 
 ## Step 8 — Create the branch
 
+**Only if Step 0 determined a git repository exists.** If there's no git
+repository here and the developer chose to proceed without one, skip directly
+to Step 9 and edit the file in place — there is no branch to create.
+
 Branch naming convention:
 
 ```
@@ -214,7 +256,8 @@ git -C "$REPO_DIR" checkout -b agent/fix/<slug>-<date>
 Edit the file directly. Write the complete corrected content.
 
 ```bash
-# Verify the change looks right before committing
+# Verify the change looks right before committing — only if a git repository
+# exists here (see Step 0); otherwise just re-read the file directly.
 git -C "$REPO_DIR" diff <target-file-path>
 ```
 
@@ -222,6 +265,10 @@ The diff must show only the minimal change. If it shows unrelated changes,
 revert and redo.
 
 ## Step 10 — Commit
+
+**Only if Step 0 determined a git repository exists, and the developer wants
+git tracking for this change.** Otherwise, report the change made and stop —
+there is no commit to make.
 
 Stage only the file you changed. Never `git add .`.
 
@@ -231,6 +278,10 @@ git -C "$REPO_DIR" commit -m "[agent] fix: <bug description, max 60 chars>"
 ```
 
 ## Step 11 — Push and open the PR
+
+**Only applies if this repository has a real GitHub remote and the developer
+wants a PR opened.** A local-only repository with no GitHub remote has nothing
+for this step to push to — report the local commit and stop instead.
 
 ```bash
 git -C "$REPO_DIR" push origin agent/fix/<slug>-<date>
@@ -284,13 +335,18 @@ this in the Step 12 report so the developer knows to assign a different reviewer
 
 ## Step 12 — Report back
 
-Tell the developer:
+Tell the developer what actually happened — adapt this to whichever mode
+Step 0 determined applied:
 
 ```
-✓ PR opened: <pr-url>
-  Branch:    agent/fix/<slug>-<date>
+✓ PR opened: <pr-url>                      (only if Step 11 ran)
+  OR
+✓ Change committed locally: <commit sha>   (only if Step 10 ran, no PR)
+  OR
+✓ Change made (no git tracking): <file>    (if Step 0 found no git repo)
+
   Changed:   <target-file-path>
-  Graph:     <reused / rebuilt>
+  Graph:     <reused / rebuilt / not used — no GitHub-backed graph for this run>
   Skills used: fix-bug<, + any convention skill from Step 6>
   Summary:   <one sentence>
   Confidence: <high/medium/low>
@@ -310,12 +366,15 @@ reviewer knows where to focus.
 - Retry more than twice if something fails — report the failure instead.
 - Substitute a different provider's API key when the configured one fails for
   graphify — report the failure instead (see `references/edge-cases.md`).
+- Silently invent a workflow when the actual environment doesn't match what
+  this skill assumes — say so explicitly instead (see Step 0).
 
 ## Failure modes
 
 | Condition | Behaviour |
 |---|---|
 | Repository not found | Report and stop. Ask developer to verify the repo name. |
+| No git repository present | Stop and ask the developer how to proceed (see Step 0). Do not improvise silently. |
 | graphify extract fails | Report the exact error. Do not swap to a different provider's key. |
 | Knowledge graph returns no results | Retry with broader query once. If still empty, ask developer for file path. |
 | Cannot determine correct fix | Report findings, ask for clarification. Do not guess. |

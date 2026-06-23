@@ -11,6 +11,11 @@ description: >
   you want a concrete, copy-pasteable rule + test scaffold.
 ---
 
+<!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->
+Before doing anything else in this skill, read and follow the clarification protocol at:
+/home/gautham/10xMinds/AI-Dev-Agent/dev-agent-skills/CLARIFICATION-PROTOCOL.md
+<!-- END dev-agent-skills clarification protocol -->
+
 # ESLint rule author
 
 How to add or modify a rule in a custom ESLint plugin, with a testing and
