@@ -16,7 +16,6 @@ echo "dev-agent-skills setup"
 echo "Skills directory: $SKILLS_DIR"
 echo ""
 
-# Find all skill folders (any folder containing a SKILL.md at its root)
 SKILL_FOLDERS=()
 for dir in "$SKILLS_DIR"/*/; do
   if [ -f "$dir/SKILL.md" ]; then
@@ -92,15 +91,6 @@ inject_clarification_protocol() {
       continue
     fi
 
-    # Piped through `cat -s` (squeeze repeated blank lines to one) as a final
-    # normalization step — without this, re-running setup.sh repeatedly
-    # (its whole documented purpose) accumulates one extra blank line per
-    # run forever, since each strip-then-reinsert cycle leaves the
-    # previous run's spacing behind. Confirmed by testing: blank-line count
-    # grew from a handful to 11 after just 4 runs without this. Minor side
-    # effect: any intentional double-blank-line spacing elsewhere in a
-    # skill's body also gets collapsed to single — acceptable, since
-    # markdown renders that identically anyway.
     {
       head -n "$second_dash" "$stripped"
       echo ""
@@ -132,18 +122,7 @@ inject_clarification_protocol
 echo ""
 
 # ── OpenCode global config (permission + standing rules) ─────────────────────
-#
-# Folds today's manual debugging session into the one-command setup: the
-# skill permission, a softer guardrail on subagent dispatch (task: "ask" —
-# see CLARIFICATION-PROTOCOL.md / chat history for why plain instruction
-# wording alone hit a ceiling), and the standing "load a skill first" rule —
-# all wired into the GLOBAL OpenCode config, not the user's own project or
-# personal AGENTS.md, which is never touched. Uses jq to merge safely with
-# whatever's already in opencode.json (confirmed necessary: a real machine
-# tested today already had unrelated keys — $schema, agent, mode, plugin,
-# command, username — that a naive overwrite would have destroyed). Falls
-# back to printing the exact snippet to add by hand if jq isn't installed,
-# rather than risking a fragile non-jq JSON edit.
+
 configure_opencode_global() {
   if ! command -v opencode &>/dev/null && [ ! -d "$HOME/.config/opencode" ]; then
     return  # OpenCode isn't installed/used on this machine — nothing to do
@@ -230,11 +209,7 @@ if command -v gemini &>/dev/null || [ -d "$HOME/.config/gemini" ]; then
 fi
 
 # ── OpenCode (global skills dir) ──────────────────────────────────────────────
-#
-# This is the real, primary mechanism for OpenCode — same pattern as the
-# three blocks above, always attempted regardless of the current working
-# directory. (See the portable .agents/skills block below for why that one
-# is NOT a reliable substitute for this.)
+
 if command -v opencode &>/dev/null || [ -d "$HOME/.config/opencode" ]; then
   link_skills "$HOME/.config/opencode/skills" "OpenCode"
 fi
