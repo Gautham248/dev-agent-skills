@@ -8,13 +8,13 @@ in your AI IDE instantly.
 <!-- BEGIN dev-agent-skills skills table (managed by scripts/regen-readme.mjs -- do not edit this block by hand, edit the source SKILL.md instead and re-run setup.sh) -->
 | Skill | What it does |
 |---|---|
-| [`eslint-rule-author`](./eslint-rule-author/) | Authors and tests custom ESLint rules with the typescript-eslint stack |
-| [`first-principles-review`](./first-principles-review/) | Critical PR review that questions the premise, not just the style |
-| [`fix-bug`](./fix-bug/) | Finds the relevant file via knowledge graph, fixes a bug, opens a PR |
-| [`plan-feature`](./plan-feature/) | Produces a codebase-aware implementation plan for a new feature |
-| [`sync-prs`](./sync-prs/) | Keeps your open PRs current: merges base, triages CI, surfaces review threads |
-| [`typescript-conventions`](./typescript-conventions/) | TypeScript baseline: parse don't cast, validate at boundaries, inference over annotation |
-| [`webapp-conventions`](./webapp-conventions/) | SvelteKit + Tailwind conventions: spacing, styling, data loading, auth, testing |
+| [`eslint-rule-author`](./eslint-rule-author/) | Use when authoring or modifying rules in a custom ESLint plugin — adding a new rule, fixing a false positive… |
+| [`first-principles-review`](./first-principles-review/) | Critical, first-principles PR review that enumerates and challenges every assumption the author made, traces… |
+| [`fix-bug`](./fix-bug/) | Use when a developer reports a bug in a GitHub repository and wants an automated fix — phrases like "fix this… |
+| [`plan-feature`](./plan-feature/) | Use when a developer wants to plan a new feature before building it — phrases like "plan this feature", "writ… |
+| [`sync-prs`](./sync-prs/) | Use when the user asks to sync, check, refresh, or triage their own open GitHub pull requests — phrases like… |
+| [`typescript-conventions`](./typescript-conventions/) | A TypeScript convention baseline for typing, validation, enum handling, imports, and naming — favoring types… |
+| [`webapp-conventions`](./webapp-conventions/) | Portable conventions for building features in a SvelteKit + Tailwind web app — the layer above raw framework… |
 <!-- END dev-agent-skills skills table -->
 
 This table is regenerated automatically by `setup.sh` (and by
