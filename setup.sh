@@ -27,36 +27,63 @@ SKILL_COUNT=${#SKILL_FOLDERS[@]}
 echo "Found $SKILL_COUNT skills: $(basename -a "${SKILL_FOLDERS[@]}" | tr '\n' ' ')"
 echo ""
 
-# ── Clarification protocol injection ──────────────────────────────────────────
+# ── Protocol injection (clarification + self-improvement) ────────────────────
 #
-# Every skill gets a standing "clarify, then confirm, before acting" step
-# injected automatically, right after its YAML frontmatter — so new skills
-# get it for free on the next `bash setup.sh` after a `git pull`, with no
-# manual per-skill editing required. The actual rules live in ONE place
-# (CLARIFICATION-PROTOCOL.md, this repo's root) — this just wires a pointer
-# to it into every skill, idempotently. Re-running this is always safe: any
-# existing managed block is stripped and rebuilt fresh (so the absolute path
-# self-corrects if this repo was re-cloned somewhere else on this machine).
+# Every skill gets two standing pointers injected automatically, right after
+# its YAML frontmatter, in this fixed order:
+#   1. "clarify, then confirm, before acting"   -> CLARIFICATION-PROTOCOL.md
+#   2. "record real edge cases as you find them" -> SELF-IMPROVEMENT-PROTOCOL.md
+#
+# New skills get both for free on the next `bash setup.sh` after a `git
+# pull`, with no manual per-skill editing required. The actual rules live in
+# ONE place each (the two *-PROTOCOL.md files at this repo's root) — this
+# just wires a pointer to each into every skill, idempotently. Re-running
+# this is always safe: both existing managed blocks are stripped and rebuilt
+# fresh in one pass, in the same fixed order, every time — so the absolute
+# path self-corrects if this repo was re-cloned somewhere else on this
+# machine, and the relative order of the two blocks can never drift based on
+# which one happened to already be present.
 #
 # This is deliberately a SKILL.md-level mechanism, not just an AGENTS.md
 # rule — AGENTS.md is genuinely cross-tool now (Codex, Claude Code, OpenCode,
 # Gemini CLI all read it), but Hermes does not appear to, and a SKILL.md-
 # embedded instruction is the one thing every harness sees identically,
-# regardless of whether it also honors AGENTS.md.
+# regardless of whether it also honors AGENTS.md. Self-improvement in
+# particular used to be opt-in and described as "Hermes only" (CONTRIBUTING.md's
+# old per-skill "## Self-improvement" footer, relying on Hermes's built-in
+# skill_manage tool) — this replaces that with a universal pointer any
+# harness with a plain file-write capability can act on, no special tool
+# required.
 
-inject_clarification_protocol() {
-  local protocol_path="$SKILLS_DIR/CLARIFICATION-PROTOCOL.md"
+strip_managed_block() {
+  # Reads $1, strips the line range between (and including) $2 and $3,
+  # writes the result to stdout. Exact-line match, no regex — avoids any
+  # escaping headaches with sed over markers containing parentheses.
+  awk -v b="$2" -v e="$3" '
+    $0==b {skip=1; next}
+    $0==e {skip=0; next}
+    skip==1 {next}
+    {print}
+  ' "$1"
+}
 
-  if [ ! -f "$protocol_path" ]; then
-    echo "  ⚠️  CLARIFICATION-PROTOCOL.md not found at $protocol_path — skipping injection for all skills."
-    return
-  fi
+inject_protocol_pointers() {
+  local clar_path="$SKILLS_DIR/CLARIFICATION-PROTOCOL.md"
+  local si_path="$SKILLS_DIR/SELF-IMPROVEMENT-PROTOCOL.md"
+  local clar_begin="<!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->"
+  local clar_end="<!-- END dev-agent-skills clarification protocol -->"
+  local si_begin="<!-- BEGIN dev-agent-skills self-improvement protocol (managed by setup.sh -- do not edit this block manually; edit SELF-IMPROVEMENT-PROTOCOL.md instead) -->"
+  local si_end="<!-- END dev-agent-skills self-improvement protocol -->"
 
-  local begin_marker="<!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->"
-  local end_marker="<!-- END dev-agent-skills clarification protocol -->"
-  local injected=0
-  local refreshed=0
+  local have_clar="true" have_si="true"
+  [ -f "$clar_path" ] || { echo "  ⚠️  CLARIFICATION-PROTOCOL.md not found at $clar_path — skipping that injection for all skills."; have_clar="false"; }
+  [ -f "$si_path" ] || { echo "  ⚠️  SELF-IMPROVEMENT-PROTOCOL.md not found at $si_path — skipping that injection for all skills."; have_si="false"; }
+  if [ "$have_clar" = "false" ] && [ "$have_si" = "false" ]; then return; fi
+
+  local clar_injected=0 clar_refreshed=0
+  local si_injected=0 si_refreshed=0
   local skipped=0
+  local legacy_footer_skills=()
 
   for skill_dir in "${SKILL_FOLDERS[@]}"; do
     local skill_md="${skill_dir}SKILL.md"
@@ -64,61 +91,78 @@ inject_clarification_protocol() {
     skill_name=$(basename "$skill_dir")
     [ -f "$skill_md" ] || continue
 
-    local had_block="false"
-    if grep -qF "$begin_marker" "$skill_md"; then
-      had_block="true"
+    local had_clar="false" had_si="false"
+    grep -qF "$clar_begin" "$skill_md" && had_clar="true"
+    grep -qF "$si_begin" "$skill_md" && had_si="true"
+    if grep -qE '^## Self-improvement( |$)' "$skill_md"; then
+      legacy_footer_skills+=("$skill_name")
     fi
 
-    # Strip any existing managed block (exact-line match, no regex — avoids
-    # any escaping headaches with sed over a marker containing parentheses).
-    local stripped
-    stripped=$(mktemp)
-    awk -v b="$begin_marker" -v e="$end_marker" '
-      $0==b {skip=1; next}
-      $0==e {skip=0; next}
-      skip==1 {next}
-      {print}
-    ' "$skill_md" > "$stripped"
+    local stripped1 stripped2
+    stripped1=$(mktemp)
+    stripped2=$(mktemp)
+    strip_managed_block "$skill_md" "$clar_begin" "$clar_end" > "$stripped1"
+    strip_managed_block "$stripped1" "$si_begin" "$si_end" > "$stripped2"
 
     # Frontmatter is delimited by the first two lines that are exactly "---".
     local second_dash
-    second_dash=$(grep -n '^---$' "$stripped" | head -2 | tail -1 | cut -d: -f1)
+    second_dash=$(grep -n '^---$' "$stripped2" | head -2 | tail -1 | cut -d: -f1)
 
     if [ -z "$second_dash" ]; then
-      echo "  ⚠️  $skill_name: SKILL.md has no recognizable YAML frontmatter — left untouched. Add frontmatter (name/description) for this to apply."
-      rm -f "$stripped"
+      echo "  ⚠️  $skill_name: SKILL.md has no recognizable YAML frontmatter — left untouched. Add frontmatter (name/description) for either protocol to apply."
+      rm -f "$stripped1" "$stripped2"
       skipped=$((skipped + 1))
       continue
     fi
 
     {
-      head -n "$second_dash" "$stripped"
+      head -n "$second_dash" "$stripped2"
+      if [ "$have_clar" = "true" ]; then
+        echo ""
+        echo "$clar_begin"
+        echo "Before doing anything else in this skill, read and follow the clarification protocol at:"
+        echo "$clar_path"
+        echo "$clar_end"
+      fi
+      if [ "$have_si" = "true" ]; then
+        echo ""
+        echo "$si_begin"
+        echo "While using this skill, and especially when you finish, read and follow the self-improvement protocol at:"
+        echo "$si_path"
+        echo "(Append real edge cases to this skill's own references/edge-cases.md — create it if missing. See the protocol file for what qualifies.)"
+        echo "$si_end"
+      fi
       echo ""
-      echo "$begin_marker"
-      echo "Before doing anything else in this skill, read and follow the clarification protocol at:"
-      echo "$protocol_path"
-      echo "$end_marker"
-      echo ""
-      tail -n "+$((second_dash + 1))" "$stripped"
+      tail -n "+$((second_dash + 1))" "$stripped2"
     } | cat -s > "$skill_md"
 
-    rm -f "$stripped"
+    rm -f "$stripped1" "$stripped2"
 
-    if [ "$had_block" = "true" ]; then
-      refreshed=$((refreshed + 1))
-    else
-      injected=$((injected + 1))
+    if [ "$have_clar" = "true" ]; then
+      if [ "$had_clar" = "true" ]; then clar_refreshed=$((clar_refreshed + 1)); else clar_injected=$((clar_injected + 1)); fi
+    fi
+    if [ "$have_si" = "true" ]; then
+      if [ "$had_si" = "true" ]; then si_refreshed=$((si_refreshed + 1)); else si_injected=$((si_injected + 1)); fi
     fi
   done
 
-  local summary="  ✓ Clarification protocol — injected into $injected skill(s), refreshed in $refreshed"
-  if [ "$skipped" -gt 0 ]; then
-    summary="$summary, skipped $skipped (no frontmatter)"
+  if [ "$have_clar" = "true" ]; then
+    local clar_summary="  ✓ Clarification protocol — injected into $clar_injected skill(s), refreshed in $clar_refreshed"
+    [ "$skipped" -gt 0 ] && clar_summary="$clar_summary, skipped $skipped (no frontmatter)"
+    echo "$clar_summary"
   fi
-  echo "$summary"
+  if [ "$have_si" = "true" ]; then
+    local si_summary="  ✓ Self-improvement protocol — injected into $si_injected skill(s), refreshed in $si_refreshed"
+    [ "$skipped" -gt 0 ] && si_summary="$si_summary, skipped $skipped (no frontmatter)"
+    echo "$si_summary"
+  fi
+  if [ "${#legacy_footer_skills[@]}" -gt 0 ]; then
+    echo "  ℹ️  ${#legacy_footer_skills[@]} skill(s) still have the old bottom-of-file '## Self-improvement' section, now redundant with the injected pointer above: $(IFS=,; echo "${legacy_footer_skills[*]}")"
+    echo "      Harmless to leave (the injected pointer applies regardless), but worth removing by hand if it doesn't say anything beyond what SELF-IMPROVEMENT-PROTOCOL.md already covers."
+  fi
 }
 
-inject_clarification_protocol
+inject_protocol_pointers
 echo ""
 
 # ── OpenCode global config (permission + standing rules) ─────────────────────
@@ -170,6 +214,21 @@ configure_opencode_global() {
 }
 
 configure_opencode_global
+echo ""
+
+# ── README skills table ───────────────────────────────────────────────────────
+#
+# Keeps the table in README.md in sync with whatever skill folders actually
+# exist at the repo root, whether they got there by hand (CONTRIBUTING.md)
+# or via install-skillset.sh. Same managed-block idea as the clarification
+# protocol injection above: everything between the markers is regenerated,
+# everything outside them is left alone.
+
+if command -v node &>/dev/null; then
+  node "$SKILLS_DIR/scripts/regen-readme.mjs" "$SKILLS_DIR"
+else
+  echo "  ⚠️  README skills table — Node.js not found, skipping. Run 'node scripts/regen-readme.mjs' once Node is available, or update the table in README.md by hand."
+fi
 echo ""
 
 link_skills() {
