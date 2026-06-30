@@ -1,0 +1,138 @@
+{
+  "skillsets": [
+    {
+      "source_repo": "https://github.com/obra/superpowers-skills.git",
+      "ref": null,
+      "commit": "cdcd624ad3fd8026deb692e565351854569798dd",
+      "subdir": "skills",
+      "prefix": "superpowers",
+      "imported_skills": [
+        {
+          "final_name": "superpowers-preserving-productive-tensions",
+          "source_path": "architecture/preserving-productive-tensions"
+        },
+        {
+          "final_name": "superpowers-brainstorming",
+          "source_path": "collaboration/brainstorming"
+        },
+        {
+          "final_name": "superpowers-dispatching-parallel-agents",
+          "source_path": "collaboration/dispatching-parallel-agents"
+        },
+        {
+          "final_name": "superpowers-executing-plans",
+          "source_path": "collaboration/executing-plans"
+        },
+        {
+          "final_name": "superpowers-finishing-a-development-branch",
+          "source_path": "collaboration/finishing-a-development-branch"
+        },
+        {
+          "final_name": "superpowers-receiving-code-review",
+          "source_path": "collaboration/receiving-code-review"
+        },
+        {
+          "final_name": "superpowers-remembering-conversations",
+          "source_path": "collaboration/remembering-conversations"
+        },
+        {
+          "final_name": "superpowers-requesting-code-review",
+          "source_path": "collaboration/requesting-code-review"
+        },
+        {
+          "final_name": "superpowers-subagent-driven-development",
+          "source_path": "collaboration/subagent-driven-development"
+        },
+        {
+          "final_name": "superpowers-using-git-worktrees",
+          "source_path": "collaboration/using-git-worktrees"
+        },
+        {
+          "final_name": "superpowers-writing-plans",
+          "source_path": "collaboration/writing-plans"
+        },
+        {
+          "final_name": "superpowers-defense-in-depth",
+          "source_path": "debugging/defense-in-depth"
+        },
+        {
+          "final_name": "superpowers-root-cause-tracing",
+          "source_path": "debugging/root-cause-tracing"
+        },
+        {
+          "final_name": "superpowers-systematic-debugging",
+          "source_path": "debugging/systematic-debugging"
+        },
+        {
+          "final_name": "superpowers-verification-before-completion",
+          "source_path": "debugging/verification-before-completion"
+        },
+        {
+          "final_name": "superpowers-gardening-skills-wiki",
+          "source_path": "meta/gardening-skills-wiki"
+        },
+        {
+          "final_name": "superpowers-pulling-updates-from-skills-repository",
+          "source_path": "meta/pulling-updates-from-skills-repository"
+        },
+        {
+          "final_name": "superpowers-sharing-skills",
+          "source_path": "meta/sharing-skills"
+        },
+        {
+          "final_name": "superpowers-testing-skills-with-subagents",
+          "source_path": "meta/testing-skills-with-subagents"
+        },
+        {
+          "final_name": "superpowers-writing-skills",
+          "source_path": "meta/writing-skills"
+        },
+        {
+          "final_name": "superpowers-collision-zone-thinking",
+          "source_path": "problem-solving/collision-zone-thinking"
+        },
+        {
+          "final_name": "superpowers-inversion-exercise",
+          "source_path": "problem-solving/inversion-exercise"
+        },
+        {
+          "final_name": "superpowers-meta-pattern-recognition",
+          "source_path": "problem-solving/meta-pattern-recognition"
+        },
+        {
+          "final_name": "superpowers-scale-game",
+          "source_path": "problem-solving/scale-game"
+        },
+        {
+          "final_name": "superpowers-simplification-cascades",
+          "source_path": "problem-solving/simplification-cascades"
+        },
+        {
+          "final_name": "superpowers-when-stuck",
+          "source_path": "problem-solving/when-stuck"
+        },
+        {
+          "final_name": "superpowers-tracing-knowledge-lineages",
+          "source_path": "research/tracing-knowledge-lineages"
+        },
+        {
+          "final_name": "superpowers-condition-based-waiting",
+          "source_path": "testing/condition-based-waiting"
+        },
+        {
+          "final_name": "superpowers-test-driven-development",
+          "source_path": "testing/test-driven-development"
+        },
+        {
+          "final_name": "superpowers-testing-anti-patterns",
+          "source_path": "testing/testing-anti-patterns"
+        },
+        {
+          "final_name": "superpowers-using-skills",
+          "source_path": "using-skills"
+        }
+      ],
+      "installed_at": "2026-06-29T23:36:52.070Z"
+    }
+  ]
+}

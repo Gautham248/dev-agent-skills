@@ -12,6 +12,37 @@ in your AI IDE instantly.
 | [`first-principles-review`](./first-principles-review/) | Critical, first-principles PR review that enumerates and challenges every assumption the author made, traces… |
 | [`fix-bug`](./fix-bug/) | Use when a developer reports a bug in a GitHub repository and wants an automated fix — phrases like "fix this… |
 | [`plan-feature`](./plan-feature/) | Use when a developer wants to plan a new feature before building it — phrases like "plan this feature", "writ… |
+| [`superpowers-brainstorming`](./superpowers-brainstorming/) | Interactive idea refinement using Socratic method to develop fully-formed designs |
+| [`superpowers-collision-zone-thinking`](./superpowers-collision-zone-thinking/) | Force unrelated concepts together to discover emergent properties - "What if we treated X like Y?" |
+| [`superpowers-condition-based-waiting`](./superpowers-condition-based-waiting/) | Replace arbitrary timeouts with condition polling for reliable async tests |
+| [`superpowers-defense-in-depth`](./superpowers-defense-in-depth/) | Validate at every layer data passes through to make bugs impossible |
+| [`superpowers-dispatching-parallel-agents`](./superpowers-dispatching-parallel-agents/) | Use multiple Claude agents to investigate and fix independent problems concurrently |
+| [`superpowers-executing-plans`](./superpowers-executing-plans/) | Execute detailed plans in batches with review checkpoints |
+| [`superpowers-finishing-a-development-branch`](./superpowers-finishing-a-development-branch/) | Complete feature development with structured options for merge, PR, or cleanup |
+| [`superpowers-gardening-skills-wiki`](./superpowers-gardening-skills-wiki/) | Maintain skills wiki health - check links, naming, cross-references, and coverage |
+| [`superpowers-inversion-exercise`](./superpowers-inversion-exercise/) | Flip core assumptions to reveal hidden constraints and alternative approaches - "what if the opposite were tr… |
+| [`superpowers-meta-pattern-recognition`](./superpowers-meta-pattern-recognition/) | Spot patterns appearing in 3+ domains to find universal principles |
+| [`superpowers-preserving-productive-tensions`](./superpowers-preserving-productive-tensions/) | Recognize when disagreements reveal valuable context, preserve multiple valid approaches instead of forcing p… |
+| [`superpowers-pulling-updates-from-skills-repository`](./superpowers-pulling-updates-from-skills-repository/) | Sync local skills repository with upstream changes from obra/superpowers-skills |
+| [`superpowers-receiving-code-review`](./superpowers-receiving-code-review/) | Receive and act on code review feedback with technical rigor, not performative agreement or blind implementat… |
+| [`superpowers-remembering-conversations`](./superpowers-remembering-conversations/) | Search previous Claude Code conversations for facts, patterns, decisions, and context using semantic or text… |
+| [`superpowers-requesting-code-review`](./superpowers-requesting-code-review/) | Dispatch code-reviewer subagent to review implementation against plan or requirements before proceeding |
+| [`superpowers-root-cause-tracing`](./superpowers-root-cause-tracing/) | Systematically trace bugs backward through call stack to find original trigger |
+| [`superpowers-scale-game`](./superpowers-scale-game/) | Test at extremes (1000x bigger/smaller, instant/year-long) to expose fundamental truths hidden at normal scal… |
+| [`superpowers-sharing-skills`](./superpowers-sharing-skills/) | Contribute skills back to upstream via branch and PR |
+| [`superpowers-simplification-cascades`](./superpowers-simplification-cascades/) | Find one insight that eliminates multiple components - "if this is true, we don't need X, Y, or Z" |
+| [`superpowers-subagent-driven-development`](./superpowers-subagent-driven-development/) | Execute implementation plan by dispatching fresh subagent for each task, with code review between tasks |
+| [`superpowers-systematic-debugging`](./superpowers-systematic-debugging/) | Four-phase debugging framework that ensures root cause investigation before attempting fixes. Never jump to s… |
+| [`superpowers-test-driven-development`](./superpowers-test-driven-development/) | Write the test first, watch it fail, write minimal code to pass |
+| [`superpowers-testing-anti-patterns`](./superpowers-testing-anti-patterns/) | Never test mock behavior. Never add test-only methods to production classes. Understand dependencies before m… |
+| [`superpowers-testing-skills-with-subagents`](./superpowers-testing-skills-with-subagents/) | RED-GREEN-REFACTOR for process documentation - baseline without skill, write addressing failures, iterate clo… |
+| [`superpowers-tracing-knowledge-lineages`](./superpowers-tracing-knowledge-lineages/) | Understand how ideas evolved over time to find old solutions for new problems and avoid repeating past failur… |
+| [`superpowers-using-git-worktrees`](./superpowers-using-git-worktrees/) | Create isolated git worktrees with smart directory selection and safety verification |
+| [`superpowers-using-skills`](./superpowers-using-skills/) | Skills wiki intro - mandatory workflows, search tool, brainstorming triggers |
+| [`superpowers-verification-before-completion`](./superpowers-verification-before-completion/) | Run verification commands and confirm output before claiming success |
+| [`superpowers-when-stuck`](./superpowers-when-stuck/) | Dispatch to the right problem-solving technique based on how you're stuck |
+| [`superpowers-writing-plans`](./superpowers-writing-plans/) | Create detailed implementation plans with bite-sized tasks for engineers with zero codebase context |
+| [`superpowers-writing-skills`](./superpowers-writing-skills/) | TDD for process documentation - test with subagents before writing, iterate until bulletproof |
 | [`sync-prs`](./sync-prs/) | Use when the user asks to sync, check, refresh, or triage their own open GitHub pull requests — phrases like… |
 | [`typescript-conventions`](./typescript-conventions/) | A TypeScript convention baseline for typing, validation, enum handling, imports, and naming — favoring types… |
 | [`webapp-conventions`](./webapp-conventions/) | Portable conventions for building features in a SvelteKit + Tailwind web app — the layer above raw framework… |
