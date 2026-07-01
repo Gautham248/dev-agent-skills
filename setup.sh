@@ -70,6 +70,17 @@ strip_managed_block() {
 inject_protocol_pointers() {
   local clar_path="$SKILLS_DIR/CLARIFICATION-PROTOCOL.md"
   local si_path="$SKILLS_DIR/SELF-IMPROVEMENT-PROTOCOL.md"
+  # Written into SKILL.md as a relative path, not $clar_path/$si_path
+  # (which stay absolute, above, only for the existence-check below).
+  # Every skill lives at exactly one level of nesting under $SKILLS_DIR
+  # (<repo-root>/<skill-name>/SKILL.md), so ../ from any SKILL.md always
+  # resolves correctly regardless of where or how the repo was checked
+  # out — including a `git merge`-only consumer like the dev-agent
+  # service's SkillsSync, which never runs setup.sh itself and therefore
+  # never gets the chance to regenerate an absolute path baked in by
+  # whoever last ran setup.sh on their own machine.
+  local clar_rel="../CLARIFICATION-PROTOCOL.md"
+  local si_rel="../SELF-IMPROVEMENT-PROTOCOL.md"
   local clar_begin="<!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->"
   local clar_end="<!-- END dev-agent-skills clarification protocol -->"
   local si_begin="<!-- BEGIN dev-agent-skills self-improvement protocol (managed by setup.sh -- do not edit this block manually; edit SELF-IMPROVEMENT-PROTOCOL.md instead) -->"
@@ -121,14 +132,14 @@ inject_protocol_pointers() {
         echo ""
         echo "$clar_begin"
         echo "Before doing anything else in this skill, read and follow the clarification protocol at:"
-        echo "$clar_path"
+        echo "$clar_rel"
         echo "$clar_end"
       fi
       if [ "$have_si" = "true" ]; then
         echo ""
         echo "$si_begin"
         echo "While using this skill, and especially when you finish, read and follow the self-improvement protocol at:"
-        echo "$si_path"
+        echo "$si_rel"
         echo "(Append real edge cases to this skill's own references/edge-cases.md — create it if missing. See the protocol file for what qualifies.)"
         echo "$si_end"
       fi
