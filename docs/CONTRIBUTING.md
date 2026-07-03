@@ -99,7 +99,7 @@ pointer, same mechanism, same idempotent managed-block pattern. You don't
 need to do anything in your skill for this to apply; it's universal, not
 opt-in.
 
-The actual rules live in one place: [`SELF-IMPROVEMENT-PROTOCOL.md`](./SELF-IMPROVEMENT-PROTOCOL.md).
+The actual rules live in one place: [`SELF-IMPROVEMENT-PROTOCOL.md`](../config/SELF-IMPROVEMENT-PROTOCOL.md).
 In short: when an agent using a skill hits a real edge case the skill's
 instructions didn't cover, it appends a dated entry to that skill's own
 `references/edge-cases.md` (creating the file if it doesn't exist yet) and
@@ -121,10 +121,10 @@ pointer doesn't already cover.
 If the skill (or set of skills) you want already exists in another repo —
 your own, a teammate's, or a public one like
 [obra/superpowers-skills](https://github.com/obra/superpowers-skills) — you
-don't need to recreate it by hand. Use `install-skillset.sh`:
+don't need to recreate it by hand. Use the `skill-add` skill:
 
-```bash
-bash install-skillset.sh <git-url> [--subdir <path>] [--prefix <name>] [--only a,b,c] [--dry-run]
+```
+/skill-add <git-url> [--subdir <path>] [--prefix <name>] [--only a,b,c] [--dry-run]
 ```
 
 This finds every `SKILL.md` in the source repo (at any depth — it doesn't
@@ -165,16 +165,16 @@ A few things worth knowing before you reach for it:
 
 ## Keeping an installed skillset current
 
-`install-skillset.sh` vendors a skillset's files — it copies them in,
+`skill-add` vendors a skillset's files — it copies them in,
 flattened, rather than tracking the source as a live reference. That's
 deliberate (this repo's convention is one folder per skill, and a
 submodule would need the same flattening logic plus real git complexity
 for every teammate) but it means upstream fixes don't reach you on their
 own. `.skillsets.json` is the record of exactly what was imported from
-where, and `update-skillsets.sh` is what reads it:
+where, and the `skill-update` skill reads it:
 
-```bash
-bash update-skillsets.sh
+```
+/skill-update
 ```
 
 This re-clones every tracked source, compares actual content (not just

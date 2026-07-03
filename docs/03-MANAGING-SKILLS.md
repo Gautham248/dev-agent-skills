@@ -75,17 +75,17 @@ After you create a new skill and run `bash setup.sh`, two managed blocks are ins
 ```
 <!-- BEGIN dev-agent-skills clarification protocol ... -->
 Before doing anything else in this skill, read and follow the clarification protocol at:
-/absolute/path/to/CLARIFICATION-PROTOCOL.md
+../config/CLARIFICATION-PROTOCOL.md
 <!-- END dev-agent-skills clarification protocol -->
 
 <!-- BEGIN dev-agent-skills self-improvement protocol ... -->
 While using this skill, and especially when you finish, read and follow the self-improvement protocol at:
-/absolute/path/to/SELF-IMPROVEMENT-PROTOCOL.md
+../config/SELF-IMPROVEMENT-PROTOCOL.md
 (Append real edge cases to this skill's own references/edge-cases.md...)
 <!-- END dev-agent-skills self-improvement protocol -->
 ```
 
-**Do not edit these blocks manually.** They are regenerated on every `setup.sh` run, so any manual edits will be overwritten. If you need to modify what the protocols say, edit `CLARIFICATION-PROTOCOL.md` or `SELF-IMPROVEMENT-PROTOCOL.md` at the repo root — those changes will propagate to every skill on the next `setup.sh` run.
+**Do not edit these blocks manually.** They are regenerated on every `setup.sh` run, so any manual edits will be overwritten. If you need to modify what the protocols say, edit `CLARIFICATION-PROTOCOL.md` or `SELF-IMPROVEMENT-PROTOCOL.md` in the `config/` directory — those changes will propagate to every skill on the next `setup.sh` run.
 
 Your skill's own instructions go below these blocks, unchanged.
 

@@ -11,7 +11,7 @@ in your AI IDE instantly.
 | [`eslint-rule-author`](./eslint-rule-author/) | Use when authoring or modifying rules in a custom ESLint plugin — adding a new rule, fixing a false positive… |
 | [`first-principles-review`](./first-principles-review/) | Critical, first-principles PR review that enumerates and challenges every assumption the author made, traces… |
 | [`fix-bug`](./fix-bug/) | Use when a developer reports a bug in a GitHub repository and wants an automated fix — phrases like "fix this… |
-| [`graphify`](./graphify/) | Build and query a repository's knowledge graph so that other skills (and the agent itself) can ground their w… |
+| [`graphify`](./graphify/) | Use for any question about a codebase, its architecture, file relationships, or project content — especially… |
 | [`plan-feature`](./plan-feature/) | Use when a developer wants to plan a new feature before building it — phrases like "plan this feature", "writ… |
 | [`skill-add`](./skill-add/) | Use when the user wants to add, import, or install a new external skill from a git repository — phrases like… |
 | [`skill-update`](./skill-update/) | Use when the user wants to update, refresh, sync, or pull the latest version of one or all tracked external s… |
@@ -21,7 +21,7 @@ in your AI IDE instantly.
 <!-- END dev-agent-skills skills table -->
 
 This table is regenerated automatically by `setup.sh` (and by
-`install-skillset.sh`) from whatever skill folders actually exist at the
+`skill-add`'s installer) from whatever skill folders actually exist at the
 repo root — don't edit it by hand, it'll just get overwritten on the next
 run. Edit the relevant `SKILL.md`'s frontmatter instead.
 
@@ -116,7 +116,7 @@ Or describe what you want naturally — the agent will load the right skill.
 
 ## Adding a new skill
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md).
+See [CONTRIBUTING.md](./docs/CONTRIBUTING.md).
 
 ## Keeping skills up to date
 

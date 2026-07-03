@@ -96,7 +96,7 @@ for skill in eslint-rule-author first-principles-review fix-bug graphify plan-fe
 done
 ```
 
-Every skill should print `1` and `OK` for both. Any `MISSING` means the injection failed — check that `CLARIFICATION-PROTOCOL.md` and `SELF-IMPROVEMENT-PROTOCOL.md` exist at the repo root.
+Every skill should print `1` and `OK` for both. Any `MISSING` means the injection failed — check that `CLARIFICATION-PROTOCOL.md` and `SELF-IMPROVEMENT-PROTOCOL.md` exist in `config/` at the repo root.
 
 Check the ordering is correct (clarification always before self-improvement):
 
@@ -130,7 +130,7 @@ You should see something like:
     }
   },
   "instructions": [
-    "/home/<you>/10xMinds/AI-Dev-Agent/dev-agent-skills/AGENT-STANDING-RULES.md"
+    "/home/<you>/10xMinds/AI-Dev-Agent/dev-agent-skills/config/AGENT-STANDING-RULES.md"
   ]
 }
 ```

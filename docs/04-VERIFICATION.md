@@ -33,7 +33,7 @@ done
 ```
 Line numbers vary by skill. The invariant is `clarification < self-improvement`.
 
-**If `MISSING`:** The protocol file wasn't found at injection time. Check that `CLARIFICATION-PROTOCOL.md` and `SELF-IMPROVEMENT-PROTOCOL.md` both exist at the repo root, then re-run `bash setup.sh`.
+**If `MISSING`:** The protocol file wasn't found at injection time. Check that `CLARIFICATION-PROTOCOL.md` and `SELF-IMPROVEMENT-PROTOCOL.md` both exist in `config/`, then re-run `bash setup.sh`.
 
 ### 2. Symlinks — skills are visible in each harness
 
@@ -79,7 +79,7 @@ print('instructions:', d.get('instructions', 'MISSING'))
 **Expected:**
 ```
 skill[*]: allow
-instructions: ['/home/<you>/dev-agent-skills/AGENT-STANDING-RULES.md']
+instructions: ['/home/<you>/dev-agent-skills/config/AGENT-STANDING-RULES.md']
 ```
 
 **If `MISSING` for either:** `jq` was not available during setup. Install `jq` and re-run `bash setup.sh`.
@@ -287,4 +287,4 @@ grep -c "BEGIN dev-agent-skills clarification protocol" your-new-skill/SKILL.md
 # should print 1
 ```
 
-If the skill shows up but the protocols are missing, the teammate's `setup.sh` failed silently — check that `CLARIFICATION-PROTOCOL.md` and `SELF-IMPROVEMENT-PROTOCOL.md` are both present in the pulled copy.
+If the skill shows up but the protocols are missing, the teammate's `setup.sh` failed silently — check that `CLARIFICATION-PROTOCOL.md` and `SELF-IMPROVEMENT-PROTOCOL.md` are both present in `config/` in the pulled copy.

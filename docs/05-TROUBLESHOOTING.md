@@ -297,7 +297,7 @@ for s in d['skillsets']:
 
 **Symptom:** Protocol pointer block inside `SKILL.md` says:
 ```
-/home/oldmachine/dev-agent-skills/CLARIFICATION-PROTOCOL.md
+/home/oldmachine/dev-agent-skills/config/CLARIFICATION-PROTOCOL.md
 ```
 But the repo is now at a different path.
 

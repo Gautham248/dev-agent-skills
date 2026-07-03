@@ -68,19 +68,19 @@ strip_managed_block() {
 }
 
 inject_protocol_pointers() {
-  local clar_path="$SKILLS_DIR/CLARIFICATION-PROTOCOL.md"
-  local si_path="$SKILLS_DIR/SELF-IMPROVEMENT-PROTOCOL.md"
+  local clar_path="$SKILLS_DIR/config/CLARIFICATION-PROTOCOL.md"
+  local si_path="$SKILLS_DIR/config/SELF-IMPROVEMENT-PROTOCOL.md"
   # Written into SKILL.md as a relative path, not $clar_path/$si_path
   # (which stay absolute, above, only for the existence-check below).
   # Every skill lives at exactly one level of nesting under $SKILLS_DIR
-  # (<repo-root>/<skill-name>/SKILL.md), so ../ from any SKILL.md always
-  # resolves correctly regardless of where or how the repo was checked
+  # (<repo-root>/<skill-name>/SKILL.md), so ../config/ from any SKILL.md
+  # always resolves correctly regardless of where or how the repo was checked
   # out — including a `git merge`-only consumer like the dev-agent
   # service's SkillsSync, which never runs setup.sh itself and therefore
   # never gets the chance to regenerate an absolute path baked in by
   # whoever last ran setup.sh on their own machine.
-  local clar_rel="../CLARIFICATION-PROTOCOL.md"
-  local si_rel="../SELF-IMPROVEMENT-PROTOCOL.md"
+  local clar_rel="../config/CLARIFICATION-PROTOCOL.md"
+  local si_rel="../config/SELF-IMPROVEMENT-PROTOCOL.md"
   local clar_begin="<!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->"
   local clar_end="<!-- END dev-agent-skills clarification protocol -->"
   local si_begin="<!-- BEGIN dev-agent-skills self-improvement protocol (managed by setup.sh -- do not edit this block manually; edit SELF-IMPROVEMENT-PROTOCOL.md instead) -->"
@@ -183,7 +183,7 @@ configure_opencode_global() {
     return  # OpenCode isn't installed/used on this machine — nothing to do
   fi
 
-  local standing_rules_path="$SKILLS_DIR/AGENT-STANDING-RULES.md"
+  local standing_rules_path="$SKILLS_DIR/config/AGENT-STANDING-RULES.md"
   if [ ! -f "$standing_rules_path" ]; then
     echo "  ⚠️  AGENT-STANDING-RULES.md not found at $standing_rules_path — skipping OpenCode global config."
     return
