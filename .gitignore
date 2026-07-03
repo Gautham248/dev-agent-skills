@@ -1,0 +1,16 @@
+# Graphify output — per-project knowledge graph, built fresh by the skill
+graphify-out/
+
+# Local artifact from `graphify install --platform opencode`
+# setup.sh handles global config; these are machine-specific
+.opencode/
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Graphify cost tracking (per-user, not project data)
+cost.json

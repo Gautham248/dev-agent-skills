@@ -8,11 +8,11 @@ The most consistent failure mode in any agent-assisted workflow is assuming some
 
 Run all of these immediately after `setup.sh` completes. If any fail, fix them before doing anything else.
 
-### 1. Protocol injection — all 7 skills, both protocols, correct order
+### 1. Protocol injection — all 10 skills, both protocols, correct order
 
 ```bash
 echo "=== INJECTION CHECK ==="
-for skill in fix-bug plan-feature sync-prs first-principles-review typescript-conventions webapp-conventions eslint-rule-author; do
+for skill in eslint-rule-author first-principles-review fix-bug graphify plan-feature skill-add skill-update sync-prs typescript-conventions webapp-conventions; do
   echo ""
   echo "--- $skill ---"
   grep -c "BEGIN dev-agent-skills clarification protocol" "$skill/SKILL.md" \
@@ -100,7 +100,7 @@ Without doing anything else, quote the first sentence of Rule 1 from AGENT-STAND
 
 ## Post-import verification checklist
 
-Run after every `install-skillset.sh` run.
+Run after every `skill-add` import.
 
 ### 1. Imported skills appear at repo root
 
@@ -144,8 +144,8 @@ grep "superpowers-" README.md | wc -l
 ### 5. Cross-reference warnings — review and decide
 
 ```bash
-# Re-run the installer in dry-run mode to see current cross-reference status
-bash install-skillset.sh <original-url> --subdir <original-subdir> --prefix <original-prefix> --dry-run
+# Re-run the skill in dry-run mode to see current cross-reference status
+/skill-add <original-url> --subdir <original-subdir> --prefix <original-prefix> --dry-run
 ```
 
 Any warnings printed represent unresolved references in the imported content. Each one requires a judgment call — see the "Cross-reference warnings" section in the Managing Skills guide.

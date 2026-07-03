@@ -28,7 +28,7 @@
 #
 # What this actually does:
 #   1. Shallow-clones the source repo to a temp directory.
-#   2. Hands off to scripts/install-skillset.mjs, which finds every
+#   2. Hands off to skill-add/scripts/install-skillset.mjs, which finds every
 #      SKILL.md in it (at any depth), flattens each into its own folder
 #      at this repo's root (the same one-folder-per-skill convention
 #      CONTRIBUTING.md already documents), handles name collisions,
@@ -49,7 +49,7 @@
 
 set -euo pipefail
 
-SKILLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 REPO_URL=""
 SUBDIR=""
@@ -104,7 +104,7 @@ echo "  at commit $COMMIT"
 echo ""
 
 NODE_ARGS=(
-  "$SKILLS_DIR/scripts/install-skillset.mjs"
+  "$SKILLS_DIR/skill-add/scripts/install-skillset.mjs"
   --clone-dir "$CLONE_DIR"
   --skills-dir "$SKILLS_DIR"
   --repo-url "$REPO_URL"

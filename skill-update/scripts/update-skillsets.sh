@@ -38,7 +38,7 @@
 
 set -euo pipefail
 
-SKILLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 usage() {
   sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'
@@ -60,4 +60,4 @@ if ! command -v git &>/dev/null; then
   exit 1
 fi
 
-node "$SKILLS_DIR/scripts/update-skillsets.mjs" "$@"
+node "$SKILLS_DIR/skill-update/scripts/update-skillsets.mjs" "$@"

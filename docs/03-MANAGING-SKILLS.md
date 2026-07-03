@@ -138,7 +138,7 @@ git push
 
 ## Part 2: Importing an external skillset
 
-`install-skillset.sh` pulls an external skill repository into this one as a managed, tracked import. The key principle: **the team lead reviews and installs once; teammates just pull and run setup.sh.** This is why import goes through the central repo rather than everyone installing individually.
+The `skill-add` skill pulls an external skill repository into this one as a managed, tracked import. The key principle: **the team lead reviews and installs once; teammates just pull and run setup.sh.** This is why import goes through the central repo rather than everyone installing individually.
 
 ### Before importing anything
 
@@ -150,8 +150,8 @@ git push
 
 ### The import command
 
-```bash
-bash install-skillset.sh <git-url> [options]
+```
+/skill-add <git-url> [options]
 ```
 
 **Options:**
@@ -169,8 +169,8 @@ bash install-skillset.sh <git-url> [options]
 
 **Step 1 — Dry run first, always:**
 
-```bash
-bash install-skillset.sh https://github.com/obra/superpowers-skills.git \
+```
+/skill-add https://github.com/obra/superpowers-skills.git \
   --subdir skills --prefix superpowers --dry-run
 ```
 
@@ -181,8 +181,8 @@ Read the output carefully:
 
 **Step 2 — Real import with `--skip-setup`:**
 
-```bash
-bash install-skillset.sh https://github.com/obra/superpowers-skills.git \
+```
+/skill-add https://github.com/obra/superpowers-skills.git \
   --subdir skills --prefix superpowers --skip-setup
 ```
 
@@ -243,8 +243,8 @@ The commit includes the imported skill folders, the updated `.skillsets.json`, t
 
 If you only want a few skills from a large repo:
 
-```bash
-bash install-skillset.sh https://github.com/obra/superpowers-skills.git \
+```
+/skill-add https://github.com/obra/superpowers-skills.git \
   --subdir skills --prefix superpowers \
   --only systematic-debugging,root-cause-tracing,verification-before-completion \
   --dry-run
@@ -266,12 +266,15 @@ Use `--prefix` to give the imported skill a distinct name, or choose `--only` to
 
 ## Part 3: Updating installed skillsets
 
-External skillsets evolve — bugs get fixed, new instructions are added, edge cases get documented. `update-skillsets.sh` re-pulls the latest version of every skillset tracked in `.skillsets.json` without requiring you to remember any of the original install arguments — those are already recorded in the manifest.
+External skillsets evolve — bugs get fixed, new instructions are added, edge cases get documented. The `skill-update` skill re-pulls the latest version of every skillset tracked in `.skillsets.json` without requiring you to remember any of the original install arguments — those are already recorded in the manifest.
 
 ### The update command
 
-```bash
-bash update-skillsets.sh [options]
+By default, it updates all tracked skillsets. Use flags only when you want to narrow the scope:
+
+```
+/skill-update               # update everything (default)
+/skill-update --source superpowers  # just one
 ```
 
 **Options:**
@@ -287,8 +290,8 @@ bash update-skillsets.sh [options]
 
 **Check what would change first:**
 
-```bash
-bash update-skillsets.sh --dry-run
+```
+/skill-update --dry-run
 ```
 
 Output examples:
@@ -305,22 +308,22 @@ Output examples:
 
 **Run the actual update:**
 
-```bash
-bash update-skillsets.sh
+```
+/skill-update
 ```
 
 The update is content-diffed, not just commit-diffed. A new upstream commit that didn't change any skill content you have imported will report "content identical, nothing to update" and won't modify any files. Only real content changes trigger file writes. `setup.sh` runs automatically at the end only if at least one skill actually changed.
 
 **If you only want to update one skillset:**
 
-```bash
-bash update-skillsets.sh --source superpowers
+```
+/skill-update --source superpowers
 ```
 
 **To pick up new skills added upstream since your last install:**
 
-```bash
-bash update-skillsets.sh --include-new
+```
+/skill-update --include-new
 ```
 
 By default the update only refreshes skills that were previously imported. `--include-new` also imports any new skills added to the source repo since your last install. Use this deliberately, not on autopilot — new skills from an external source may need the same review you'd give any new import.
@@ -342,7 +345,7 @@ There's no fixed cadence — run it when you think upstream may have improved. F
 
 ## Part 4: The `.skillsets.json` manifest
 
-`.skillsets.json` is the machine-readable record of every external skillset imported into this repo. You generally don't need to edit it by hand — `install-skillset.sh` and `update-skillsets.sh` manage it — but understanding its structure helps when something goes wrong.
+`.skillsets.json` is the machine-readable record of every external skillset imported into this repo. You generally don't need to edit it by hand — the `skill-add` and `skill-update` skills' scripts manage it — but understanding its structure helps when something goes wrong.
 
 ```json
 {
@@ -366,8 +369,8 @@ There's no fixed cadence — run it when you think upstream may have improved. F
 ```
 
 Fields that matter:
-- `commit` — the SHA of the upstream repo at the time of import. `update-skillsets.sh` compares against this to detect upstream changes.
-- `imported_skills[].final_name` — the folder name as it exists at the repo root. Used by `update-skillsets.sh` to know which skills to refresh (by default, only these — not new ones added upstream).
+- `commit` — the SHA of the upstream repo at the time of import. The `skill-update` skill's script compares against this to detect upstream changes.
+- `imported_skills[].final_name` — the folder name as it exists at the repo root. Used by the `skill-update` script to know which skills to refresh (by default, only these — not new ones added upstream).
 - `prefix` and `subdir` — passed back to the installer verbatim on update, so you don't have to remember them.
 
 **Do not edit `commit` by hand** to force a re-check. If you want to force an update even when the commit SHA matches, pass `--include-new` or temporarily use `--source` with `--dry-run` to see what's upstream.
@@ -376,7 +379,7 @@ Fields that matter:
 
 ## Part 5: `SKILLSETS.md` — the human-readable provenance log
 
-Every time `install-skillset.sh` runs, it appends a new entry to `SKILLSETS.md`:
+Every time the `skill-add` skill's script runs, it appends a new entry to `SKILLSETS.md`:
 
 ```markdown
 ## https://github.com/obra/superpowers-skills.git:skills
@@ -397,8 +400,8 @@ On update, a new entry is appended with the updated commit SHA and the current d
 | Initial setup | `bash setup.sh` |
 | Pick up new skills from teammates | `git pull && bash setup.sh` |
 | Create a new skill | Create folder + `SKILL.md`, then `bash setup.sh` |
-| Import a new external skillset | `bash install-skillset.sh <url> [--prefix <name>] [--subdir <path>]` |
+| Import a new external skillset | `/skill-add <url> [--prefix <name>] [--subdir <path>]` |
 | Preview an import before running it | Same command with `--dry-run` |
-| Update all tracked external skillsets | `bash update-skillsets.sh` |
-| Update just one tracked skillset | `bash update-skillsets.sh --source <substring>` |
-| Preview an update before running it | `bash update-skillsets.sh --dry-run` |
+| Update all tracked external skillsets | `/skill-update` (default: updates everything) |
+| Update just one tracked skillset | `/skill-update --source <substring>` |
+| Preview an update before running it | `/skill-update --dry-run` |

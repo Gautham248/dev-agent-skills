@@ -11,7 +11,10 @@ in your AI IDE instantly.
 | [`eslint-rule-author`](./eslint-rule-author/) | Use when authoring or modifying rules in a custom ESLint plugin — adding a new rule, fixing a false positive… |
 | [`first-principles-review`](./first-principles-review/) | Critical, first-principles PR review that enumerates and challenges every assumption the author made, traces… |
 | [`fix-bug`](./fix-bug/) | Use when a developer reports a bug in a GitHub repository and wants an automated fix — phrases like "fix this… |
+| [`graphify`](./graphify/) | Build and query a repository's knowledge graph so that other skills (and the agent itself) can ground their w… |
 | [`plan-feature`](./plan-feature/) | Use when a developer wants to plan a new feature before building it — phrases like "plan this feature", "writ… |
+| [`skill-add`](./skill-add/) | Use when the user wants to add, import, or install a new external skill from a git repository — phrases like… |
+| [`skill-update`](./skill-update/) | Use when the user wants to update, refresh, sync, or pull the latest version of one or all tracked external s… |
 | [`sync-prs`](./sync-prs/) | Use when the user asks to sync, check, refresh, or triage their own open GitHub pull requests — phrases like… |
 | [`typescript-conventions`](./typescript-conventions/) | A TypeScript convention baseline for typing, validation, enum handling, imports, and naming — favoring types… |
 | [`webapp-conventions`](./webapp-conventions/) | Portable conventions for building features in a SvelteKit + Tailwind web app — the layer above raw framework… |
@@ -24,20 +27,13 @@ run. Edit the relevant `SKILL.md`'s frontmatter instead.
 
 ## Installing an external skillset
 
-You're not limited to the 7 skills above. Any repo that follows the open
+You're not limited to the skills above. Use the `skill-add` skill to import
+external skill repos that follow the open
 [Agent Skills format](https://github.com/anthropics/skills) (a folder per
-skill, `SKILL.md` at its root — at any depth, including nested under a
-`skills/` subdirectory) can be pulled in wholesale and become part of this
-repo's superset:
+skill, `SKILL.md` at its root):
 
-```bash
-bash install-skillset.sh <git-url> [--subdir <path>] [--prefix <name>] [--only a,b,c] [--dry-run]
 ```
-
-For example, to pull in [obra/superpowers-skills](https://github.com/obra/superpowers-skills):
-
-```bash
-bash install-skillset.sh https://github.com/obra/superpowers-skills.git \
+/skill-add https://github.com/obra/superpowers-skills.git \
   --subdir skills --prefix superpowers
 ```
 
@@ -50,30 +46,29 @@ any other skill here. Always review the diff (and the cross-reference
 warnings it prints) before committing.
 
 `--prefix` is strongly recommended for any large or general-purpose
-skillset, to avoid name collisions with skills you already have. See
-`bash install-skillset.sh --help` for the rest of the options, and
-[`SKILLSETS.md`](./SKILLSETS.md) (created on first use) for the provenance
+skillset, to avoid name collisions with skills you already have.
+See `.skillsets.json` (created on first use) for the provenance
 log of what's been imported from where.
 
 ### Keeping installed skillsets current
 
-`install-skillset.sh` is for bringing a new skillset in. To pull the
-latest version of everything you've already installed:
+The `skill-add` skill is for bringing a new skillset in. To pull the
+latest version of everything you've already installed, use the
+`skill-update` skill — it updates all tracked skillsets by default:
 
-```bash
-bash update-skillsets.sh           # check + refresh every tracked skillset
-bash update-skillsets.sh --dry-run # see what would change, touch nothing
-bash update-skillsets.sh --source superpowers   # just one
+```
+/skill-update               # check + refresh every tracked skillset
+/skill-update --dry-run     # see what would change, touch nothing
+/skill-update --source superpowers   # just one
 ```
 
-It reads `.skillsets.json` (the record `install-skillset.sh` keeps of
+It reads `.skillsets.json` (the record `skill-add` keeps of
 every external source you've pulled from), re-clones each source, and
 only rewrites a skill's files if its content actually changed — re-running
-this with nothing new upstream is a no-op, not a no-op-shaped diff. By
-default it only refreshes skills you already have; pass `--include-new`
-if you also want to pick up anything added upstream since your last
-install. `setup.sh` runs once at the end automatically if anything
-changed.
+this with nothing new upstream is a no-op. By default it only refreshes
+skills you already have; pass `--include-new` if you also want to pick
+up anything added upstream since your last install. `setup.sh` runs once
+at the end automatically if anything changed.
 
 ## Install
 
@@ -97,16 +92,17 @@ directory automatically. Run it again after pulling new skills.
 In your AI IDE, from inside any repo:
 
 ```
-/fix-bug
-/plan-feature
-/first-principles-review
-/sync-prs
-/typescript-conventions
-/webapp-conventions
-/eslint-rule-author
+/fix-bug        /plan-feature     /first-principles-review
+/sync-prs       /skill-add        /skill-update
+/graphify       /typescript-conventions
+/webapp-conventions               /eslint-rule-author
 ```
 
 Or describe what you want naturally — the agent will load the right skill.
+
+**First question?** The agent automatically checks for a knowledge graph
+(`graphify-out/graph.json`), builds it if missing (auto-installing
+`graphifyy` if needed), and uses it to ground every answer.
 
 ## Manual install (if setup.sh doesn't cover your IDE)
 

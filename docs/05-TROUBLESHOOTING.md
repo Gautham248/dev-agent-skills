@@ -227,7 +227,7 @@ it qualifies under SELF-IMPROVEMENT-PROTOCOL.md's criteria.
 
 ---
 
-### `install-skillset.sh` fails with "no SKILL.md files found"
+### `skill-add` fails with "no SKILL.md files found"
 
 **Symptom:**
 ```
@@ -241,12 +241,12 @@ install-skillset.mjs: no SKILL.md files found under /tmp/xyz. Nothing to install
 # First, find where the SKILL.md files actually are:
 git clone --depth 1 <url> /tmp/check-skills && find /tmp/check-skills -name SKILL.md
 # Note the common ancestor directory and pass it as --subdir:
-bash install-skillset.sh <url> --subdir <that-directory> [--prefix <name>]
+/skill-add <url> --subdir <that-directory> [--prefix <name>]
 ```
 
 ---
 
-### `install-skillset.sh` skips all skills with "already exists" message
+### `skill-add` skips all skills with "already exists" message
 
 **Symptom:**
 ```
@@ -256,13 +256,13 @@ Skipped: brainstorming — "brainstorming" already exists at the repo root and i
 **Root cause:** You have a hand-authored skill with the same name, or a previous import from a different source.
 
 **Fix:** Use `--prefix` to give the imported skills a distinct namespace:
-```bash
-bash install-skillset.sh <url> --subdir skills --prefix myprefix
+```
+/skill-add <url> --subdir skills --prefix myprefix
 ```
 
 ---
 
-### `update-skillsets.sh` reports "already up to date" but the skill content seems stale
+### `skill-update` reports "already up to date" but the skill content seems stale
 
 **Symptom:** You know upstream has changed the skill content, but the update command says nothing to do.
 
@@ -279,16 +279,16 @@ for s in d['skillsets']:
 ```
 
 **Fix (if you need to track a specific branch):** Re-import with `--ref`:
-```bash
-bash install-skillset.sh <url> --subdir <subdir> --prefix <prefix> --ref <branch-name>
+```
+/skill-add <url> --subdir <subdir> --prefix <prefix> --ref <branch-name>
 ```
 
 **Root cause (less likely):** The `commit` field in `.skillsets.json` was manually edited or got out of sync.
 
 **Fix:**
-```bash
+```
 # Force a full content re-check regardless of commit SHA:
-bash update-skillsets.sh --include-new
+/skill-update --include-new
 ```
 
 ---

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scripts/update-skillsets.mjs
+// skill-update/scripts/update-skillsets.mjs
 //
 // Reads .skillsets.json (the record install-skillset.sh already keeps of
 // every external skillset that's been pulled in) and, for each entry,
@@ -23,7 +23,7 @@
 // repeatedly.
 //
 // Usage:
-//   node scripts/update-skillsets.mjs [--source <git-url-substring>]
+//   node skill-update/scripts/update-skillsets.mjs [--source <git-url-substring>]
 //                                      [--dry-run] [--skip-setup] [--include-new]
 
 import fs from "node:fs";
@@ -33,8 +33,8 @@ import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SKILLS_DIR = path.resolve(__dirname, "..");
-const INSTALL_MJS = path.join(__dirname, "install-skillset.mjs");
+const SKILLS_DIR = path.resolve(__dirname, "../..");
+const INSTALL_MJS = path.join(__dirname, "../../skill-add/scripts/install-skillset.mjs");
 const SETUP_SH = path.join(SKILLS_DIR, "setup.sh");
 const MANIFEST_PATH = path.join(SKILLS_DIR, ".skillsets.json");
 
@@ -58,7 +58,7 @@ function printHelp() {
   console.log(`update-skillsets.mjs — refresh every (or one) tracked external skillset from its source
 
 Usage:
-  node scripts/update-skillsets.mjs [options]
+  node skill-update/scripts/update-skillsets.mjs [options]
 
 Options:
   --source <substring>   Only update skillsets whose source_repo contains this

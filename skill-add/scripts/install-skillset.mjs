@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scripts/install-skillset.mjs
+// skill-add/scripts/install-skillset.mjs
 //
 // Does the actual work for `install-skillset.sh`. Given a directory that's
 // already a clone of some external skillset repo, this:
@@ -39,7 +39,7 @@ import {
   findSkillMdFiles,
   walkTextFiles,
   hashDir,
-} from "./skill-lib.mjs";
+} from "../../scripts/skill-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -287,7 +287,7 @@ function main() {
 
   // ---- Pass 5: README ----
   try {
-    execFileSync(process.execPath, [path.join(__dirname, "regen-readme.mjs"), args.skillsDir], { stdio: "inherit" });
+    execFileSync(process.execPath, [path.join(__dirname, "../../scripts/regen-readme.mjs"), args.skillsDir], { stdio: "inherit" });
   } catch (e) {
     console.error("  ⚠️  could not run regen-readme.mjs automatically:", e.message, "— run it by hand: node scripts/regen-readme.mjs");
   }

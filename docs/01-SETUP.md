@@ -55,15 +55,15 @@ This is the only command you need. It does everything: injects the governance pr
 dev-agent-skills setup
 Skills directory: /home/<you>/10xMinds/AI-Dev-Agent/dev-agent-skills
 
-Found 7 skills: eslint-rule-author first-principles-review fix-bug plan-feature sync-prs typescript-conventions webapp-conventions
+Found 10 skills: eslint-rule-author first-principles-review fix-bug graphify plan-feature skill-add skill-update sync-prs typescript-conventions webapp-conventions
 
-  ✓ Clarification protocol — injected into 7 skill(s), refreshed in 0
-  ✓ Self-improvement protocol — injected into 7 skill(s), refreshed in 0
+  ✓ Clarification protocol — injected into 10 skill(s), refreshed in 0
+  ✓ Self-improvement protocol — injected into 10 skill(s), refreshed in 0
   ℹ️  1 skill(s) still have the old bottom-of-file '## Self-improvement' section, now redundant with the injected pointer above: fix-bug
       Harmless to leave (the injected pointer applies regardless)...
 
   ✓ OpenCode global config — /home/<you>/.config/opencode/opencode.json (permission.skill=allow; ...)
-  ✓ README.md skills table — regenerated (7 skills)
+  ✓ README.md skills table — regenerated (10 skills)
 
   ✓ Claude Code — /home/<you>/.claude/skills (7 new links)
   ✓ OpenCode — /home/<you>/.config/opencode/skills (7 new links)
@@ -76,11 +76,11 @@ The specific harness lines you see depend on what's installed. Missing a harness
 
 **Run setup.sh again on second run:**
 ```
-  ✓ Clarification protocol — injected into 0 skill(s), refreshed in 7
-  ✓ Self-improvement protocol — injected into 0 skill(s), refreshed in 7
+  ✓ Clarification protocol — injected into 0 skill(s), refreshed in 10
+  ✓ Self-improvement protocol — injected into 0 skill(s), refreshed in 10
   ✓ Claude Code — /home/<you>/.claude/skills (0 new links)
 ```
-"Refreshed in 7, 0 new links" — this is correct. The script is idempotent.
+"Refreshed in 10, 0 new links" — this is correct. The script is idempotent.
 
 ---
 
@@ -89,7 +89,7 @@ The specific harness lines you see depend on what's installed. Missing a harness
 Confirm the protocols actually landed inside the skills, not just that the script ran:
 
 ```bash
-for skill in fix-bug plan-feature sync-prs first-principles-review typescript-conventions webapp-conventions eslint-rule-author; do
+for skill in eslint-rule-author first-principles-review fix-bug graphify plan-feature skill-add skill-update sync-prs typescript-conventions webapp-conventions; do
   echo "=== $skill ==="
   grep -c "BEGIN dev-agent-skills clarification protocol" "$skill/SKILL.md" && echo "  clarification: OK" || echo "  clarification: MISSING"
   grep -c "BEGIN dev-agent-skills self-improvement protocol" "$skill/SKILL.md" && echo "  self-improvement: OK" || echo "  self-improvement: MISSING"
@@ -101,14 +101,14 @@ Every skill should print `1` and `OK` for both. Any `MISSING` means the injectio
 Check the ordering is correct (clarification always before self-improvement):
 
 ```bash
-for skill in fix-bug plan-feature sync-prs first-principles-review typescript-conventions webapp-conventions eslint-rule-author; do
+for skill in eslint-rule-author first-principles-review fix-bug graphify plan-feature skill-add skill-update sync-prs typescript-conventions webapp-conventions; do
   clar=$(grep -n "BEGIN dev-agent-skills clarification" "$skill/SKILL.md" | cut -d: -f1)
   si=$(grep -n "BEGIN dev-agent-skills self-improvement" "$skill/SKILL.md" | cut -d: -f1)
   [ "$clar" -lt "$si" ] && echo "$skill: ORDER OK" || echo "$skill: ORDER WRONG"
 done
 ```
 
-All seven should print `ORDER OK`.
+All ten should print `ORDER OK`.
 
 ---
 
