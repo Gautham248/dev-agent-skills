@@ -14,6 +14,7 @@ in your AI IDE instantly.
 | [`graphify`](./graphify/) | Use for any question about a codebase, its architecture, file relationships, or project content — especially… |
 | [`plan-feature`](./plan-feature/) | Use when a developer wants to plan a new feature before building it — phrases like "plan this feature", "writ… |
 | [`skill-add`](./skill-add/) | Use when the user wants to add, import, or install a new external skill from a git repository — phrases like… |
+| [`skill-factory`](./skill-factory/) | Interviews the requester through a structured clarification protocol, then designs, writes, and validates a n… |
 | [`skill-update`](./skill-update/) | Use when the user wants to update, refresh, sync, or pull the latest version of one or all tracked external s… |
 | [`sync-prs`](./sync-prs/) | Use when the user asks to sync, check, refresh, or triage their own open GitHub pull requests — phrases like… |
 | [`typescript-conventions`](./typescript-conventions/) | A TypeScript convention baseline for typing, validation, enum handling, imports, and naming — favoring types… |
