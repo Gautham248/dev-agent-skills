@@ -179,6 +179,21 @@ def validate(skill_path: Path, roster: set[str]):
         if d.exists() and d.is_dir() and not any(d.rglob("*")):
             warn(warnings, f"'{subdir}/' exists but is empty — remove it or populate it.")
 
+    # --- edge-case consultation ("closing the loop") ---
+    # SELF-IMPROVEMENT-PROTOCOL.md (injected into every skill) covers the write
+    # side: append a new edge case after hitting one. It says nothing about the
+    # read side — checking edge-cases.md when something looks off *during* a
+    # run. Unless SKILL.md itself says to consult it, a documented, already-
+    # solved gotcha can get silently re-discovered from scratch every time.
+    if "edge-cases.md" not in body:
+        warn(
+            warnings,
+            "SKILL.md doesn't mention 'edge-cases.md' anywhere in the body. Add a short "
+            "'If something goes wrong' section telling the acting agent to consult "
+            "references/edge-cases.md before improvising a fix — see assets/skill-template.md "
+            "for the standard wording.",
+        )
+
     return errors, warnings
 
 

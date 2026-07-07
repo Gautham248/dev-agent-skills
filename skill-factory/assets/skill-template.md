@@ -34,6 +34,10 @@ Expected result: [what success looks like for this step]
 **If [another realistic failure]:**
 [What to do]
 
+## If something goes wrong
+
+Before improvising a fix, check `references/edge-cases.md` — this may already be a documented, solved problem. If it's genuinely new once you're done, follow the self-improvement protocol and add it there.
+
 ## Examples
 
 **Example 1: [common scenario]**

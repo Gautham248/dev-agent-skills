@@ -69,3 +69,7 @@ For each slot, prefer the closed/example-anchored form on the left when the spac
 ## The "sign-off" bar
 
 A confirmation only counts if it responds to the substance. "Yes," "looks right," "go ahead," "correct," or a specific edit followed by re-confirmation all count. A response that changes topic, a "sure" that arrives suspiciously fast after a long spec summary (worth a light double-check: "just to be sure — anything in there you want changed?"), or no response at all do not count as sign-off. When in doubt, ask once more in the shortest possible form: "Good to go with this as written?"
+
+## Refining vs. creating
+
+Everything above is written for a from-scratch interview (Track A). Refining an existing skill (Track B, `references/refining-skills.md`) uses the same underlying technique — one closed question at a time, propose-and-confirm for vague answers, periodic recaps — but only against the slots that are actually changing. Don't re-ask about a slot just because this section describes a good question for it; check `references/refining-skills.md`'s Phase R0/R1 first to see whether it's already been backfilled from the existing skill.

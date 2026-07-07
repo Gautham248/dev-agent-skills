@@ -1,18 +1,7 @@
 ---
 name: skill-factory
-description: Interviews the requester through a structured clarification protocol, then designs, writes, and validates a new Agent Skill (SKILL.md plus scripts/references/assets) for the dev-agent-skills repo. Use when someone asks to "create a skill", "build a skill for X", "add a new skill to dev-agent-skills", "turn this workflow into a skill", "make this repeatable", or "scaffold a SKILL.md". Also use to review, validate, or fix an existing skill's frontmatter, triggering, or structure ("why doesn't my skill trigger", "check this skill", "improve this skill's description"). Do not use for ordinary bug fixes or feature work that isn't about authoring a skill itself — route those to fix-bug or plan-feature instead.
+description: Interviews the requester through a structured clarification protocol, then designs, writes, and validates a new Agent Skill (SKILL.md plus scripts/references/assets) for the dev-agent-skills repo — or refines an existing one. Use when someone asks to "create a skill", "build a skill for X", "add a new skill to dev-agent-skills", "turn this workflow into a skill", "make this repeatable", or "scaffold a SKILL.md". Also use to refine, review, validate, or fix an existing skill's frontmatter, triggering, structure, or edge-case handling ("refine this skill", "why doesn't my skill trigger", "check this skill", "improve this skill's description", "add edge cases to this skill"). Do not use for ordinary bug fixes or feature work that isn't about authoring a skill itself — route those to fix-bug or plan-feature instead.
 ---
-
-<!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->
-Before doing anything else in this skill, read and follow the clarification protocol at:
-../config/CLARIFICATION-PROTOCOL.md
-<!-- END dev-agent-skills clarification protocol -->
-
-<!-- BEGIN dev-agent-skills self-improvement protocol (managed by setup.sh -- do not edit this block manually; edit SELF-IMPROVEMENT-PROTOCOL.md instead) -->
-While using this skill, and especially when you finish, read and follow the self-improvement protocol at:
-../config/SELF-IMPROVEMENT-PROTOCOL.md
-(Append real edge cases to this skill's own references/edge-cases.md — create it if missing. See the protocol file for what qualifies.)
-<!-- END dev-agent-skills self-improvement protocol -->
 
 # Skill Factory
 
@@ -39,7 +28,7 @@ This skill must work even when the requester struggles to articulate what they w
 ## Workflow
 
 ### Phase 0 — Classify the request
-Is this: (a) a brand-new skill, (b) a fix/review of an existing skill, or (c) a validation-only check ("does this skill look right")? For (b) and (c), skip straight to reading the existing `SKILL.md` and diagnosing it against `references/anti-patterns-troubleshooting.md` and `scripts/validate_skill.py` — the interview still applies, but only to the parts that are actually unclear or broken, not the whole skill from scratch.
+Is this: (a) a brand-new skill, (b) a refinement of an existing skill (fix a mistrigger, add a capability, tighten the description, fold in a real failure as a documented edge case, restructure), or (c) a validation-only check ("does this skill look right")? For (a), continue with Phase 1 below. For (b), stop here and switch to **Track B — Refining an Existing Skill** (further down this file) — do not run the Phase 1 interview from scratch; Track B is built specifically to interview only the delta. For (c), just run `scripts/validate_skill.py` and check against `references/anti-patterns-troubleshooting.md`, report findings, and stop — no interview, no file changes.
 
 ### Phase 1 — Run the interview
 Work through the Skill Specification slots below using the communication rules above and the full question bank in `references/interview-protocol.md`. Pull in `references/design-patterns.md` when discussing the workflow shape (sequential steps, multi-tool coordination, iterative refinement, context-aware branching, or embedded domain rules) — matching the request to one of these patterns early makes the remaining questions much more concrete.
@@ -84,9 +73,32 @@ Using `references/testing-checklist.md`, give the requester: 2–3 prompts that 
 ### Phase 7 — Integration handoff
 Point to `references/dev-agent-skills-integration.md` for the exact next steps: where the folder goes, running `setup.sh` before commit (not after), verifying the resulting diff instead of trusting a summary, and — if this skill should be reachable from the `dev-agent` job pipeline rather than only invoked manually — a reminder that Hermes only reliably picks up a skill when it's explicitly named, so it likely also needs a `JOB_TYPE_SKILL` entry in `dev-agent`, not just a good description.
 
+## Track B — Refining an Existing Skill
+
+A refinement is not a from-scratch interview. Most of a working skill's spec is already correct; the job is to find the delta, confirm it, and change only that — while still holding every change to the same frontmatter/description/structural bar as a new skill. Full detail for every phase below: `references/refining-skills.md`.
+
+### Phase R0 — Read and fully understand the current skill
+Locate the skill folder (ask if ambiguous). Read `SKILL.md` in full — frontmatter and every instruction, not a skim. Read every file that exists under `references/`, `scripts/`, `assets/`, including `references/edge-cases.md` if present — that file is the skill's own accumulated field experience and directly shapes what refining it should address. Run `scripts/validate_skill.py <path>` now, before talking to anyone, to get an objective structural baseline independent of what the requester thinks is wrong. Then mentally backfill the Skill Specification table from Phase 1 by reading the existing skill — this is reconstruction, not a question to ask.
+
+### Phase R1 — Interview: what's changing, and why
+Find out what actually prompted this — a closed question first: "did this trigger wrong, produce a wrong result, or is this about adding something it doesn't do yet?" Use the same interview technique as Phase 1 (`references/interview-protocol.md`): one question at a time, propose-and-confirm for vague answers, recap every few exchanges. Only interview the slots that are actually changing — reuse the rest from Phase R0's backfill without re-asking. If the requester is describing a specific past failure, treat it explicitly as edge-case material (see Phase R3) rather than folding it into a vague prose rewrite — get enough detail to state what happened and what should happen instead, concretely.
+
+### Phase R2 — Confirm the delta
+Present a before/after summary — "changing: X, Y. Staying exactly the same: everything else" — not a full spec from scratch. Same sign-off bar as Phase 2: an explicit affirmative before touching any file.
+
+### Phase R3 — Apply the changes
+Edit only what changed, holding every edit to `references/frontmatter-spec.md` and `references/description-guide.md` exactly as strictly as Phase 3 does. Do not touch the managed clarification/self-improvement blocks near the top of the file — that's `setup.sh`'s territory (`references/dev-agent-skills-integration.md`). Ensure `references/edge-cases.md` exists — scaffold it now if this skill predates that convention — and append any edge cases surfaced in R1 in the dated format `SELF-IMPROVEMENT-PROTOCOL.md` specifies, never rewriting or removing an existing entry. Ensure `SKILL.md`'s body explicitly tells the acting agent to consult `references/edge-cases.md` when something unexpected happens *during* use, not only append to it afterward — add this line if the skill predates it (see "Closing the loop" in `references/refining-skills.md`).
+
+### Phase R4 — Validate and show the real diff
+Re-run `scripts/validate_skill.py`. Show the actual before/after diff of every changed file, not a description of the changes — same discipline as Phase 5.
+
+### Phase R5 — Testing and integration handoff
+Same as Phases 6–7, plus one addition specific to refining: include a regression check — confirm a trigger phrase or behavior that worked *before* this change still works the same way now, not just that the new behavior works.
+
 ## Quick reference index
 
 - Full interview question bank & weak-communicator handling → `references/interview-protocol.md`
+- Full detail for refining an existing skill (Track B) → `references/refining-skills.md`
 - Complete YAML frontmatter spec, allowed/forbidden fields → `references/frontmatter-spec.md`
 - How to write a description that triggers correctly → `references/description-guide.md`
 - The five workflow-shape patterns to choose from → `references/design-patterns.md`

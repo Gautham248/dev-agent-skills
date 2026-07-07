@@ -22,6 +22,11 @@ Only relevant if the spec's `test_cases` slot was "yes." Frame each test as: giv
 
 Worth doing once, informally, for anything nontrivial: run the same request with the skill disabled and note how many back-and-forth messages, tool-call failures, or retries it took versus with the skill active. If there's no real difference, the skill isn't earning its place yet — that's worth surfacing rather than shipping anyway.
 
+### 4. Regression check (refinements only)
+**Goal:** confirm the fix didn't break something that already worked.
+
+When refining an existing skill (`references/refining-skills.md`, Track B), always include at least one test of prior, already-working behavior alongside tests of the new change — a trigger phrase or scenario that worked before. A refine that fixes the reported problem but silently breaks something else is a net loss, and nothing in a testing plan built only around the new change would ever catch it.
+
 ## Full pre/during/post checklist
 
 **Before starting:**

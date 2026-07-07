@@ -50,3 +50,5 @@ A good description is necessary but not sufficient inside this system: confirmed
 - Name doesn't collide with the existing roster above
 - `setup.sh` has been run and its diff reviewed before commit
 - If pipeline-invokable, the `JOB_TYPE_SKILL` follow-up in `dev-agent` has been flagged to the requester explicitly
+
+Every item above applies identically whether the skill is brand-new (Track A) or refined (Track B, `references/refining-skills.md`) — a refinement still needs its diff reviewed and `setup.sh` re-run before commit, same as a new skill would.
