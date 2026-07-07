@@ -3,6 +3,17 @@ name: skill-factory
 description: Interviews the requester through a structured clarification protocol, then designs, writes, and validates a new Agent Skill (SKILL.md plus scripts/references/assets) for the dev-agent-skills repo — or refines an existing one. Use when someone asks to "create a skill", "build a skill for X", "add a new skill to dev-agent-skills", "turn this workflow into a skill", "make this repeatable", or "scaffold a SKILL.md". Also use to refine, review, validate, or fix an existing skill's frontmatter, triggering, structure, or edge-case handling ("refine this skill", "why doesn't my skill trigger", "check this skill", "improve this skill's description", "add edge cases to this skill"). Do not use for ordinary bug fixes or feature work that isn't about authoring a skill itself — route those to fix-bug or plan-feature instead.
 ---
 
+<!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->
+Before doing anything else in this skill, read and follow the clarification protocol at:
+../config/CLARIFICATION-PROTOCOL.md
+<!-- END dev-agent-skills clarification protocol -->
+
+<!-- BEGIN dev-agent-skills self-improvement protocol (managed by setup.sh -- do not edit this block manually; edit SELF-IMPROVEMENT-PROTOCOL.md instead) -->
+While using this skill, and especially when you finish, read and follow the self-improvement protocol at:
+../config/SELF-IMPROVEMENT-PROTOCOL.md
+(Append real edge cases to this skill's own references/edge-cases.md — create it if missing. See the protocol file for what qualifies.)
+<!-- END dev-agent-skills self-improvement protocol -->
+
 # Skill Factory
 
 A skill that builds other skills. Its entire value is refusing to guess: it turns a vague or poorly-worded request into a fully specified, unambiguous Agent Skill by running a structured interview first, and only writes files once the requester has explicitly signed off on a spec summary.
