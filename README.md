@@ -8,6 +8,7 @@ in your AI IDE instantly.
 <!-- BEGIN dev-agent-skills skills table (managed by scripts/regen-readme.mjs -- do not edit this block by hand, edit the source SKILL.md instead and re-run setup.sh) -->
 | Skill | What it does |
 |---|---|
+| [`coding-standards`](./coding-standards/) | Company coding standards for frontend, backend, and database work. Use whenever writing or modifying applicat… |
 | [`eslint-rule-author`](./eslint-rule-author/) | Use when authoring or modifying rules in a custom ESLint plugin — adding a new rule, fixing a false positive… |
 | [`first-principles-review`](./first-principles-review/) | Critical, first-principles PR review that enumerates and challenges every assumption the author made, traces… |
 | [`fix-bug`](./fix-bug/) | Use when a developer reports a bug in a GitHub repository and wants an automated fix — phrases like "fix this… |
