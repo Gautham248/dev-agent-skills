@@ -156,17 +156,16 @@ imposes on top:
   Step 1 restatement — do not re-interview the developer for what the
   issue already states.
 
-**Feature → delegate to the `plan-feature` skill, with one override.**
-First check the issue description is actually sufficient as a spec: what
-should exist, for whom, and any constraints. If it is too thin, ask the
+**Feature → delegate to the `plan-feature` skill in `comment-on-issue`
+mode.** First check the issue description is actually sufficient as a spec:
+what should exist, for whom, and any constraints. If it is too thin, ask the
 developer targeted questions (same clarification discipline as a bug fix)
-before planning. Then follow plan-feature for the graph queries and plan
-structure, but **override its save step**: do not create a new issue and
-do not open a plan PR — post the plan as a comment on the existing issue:
-
-```bash
-gh issue comment <number> --repo <owner>/<repo> --body-file <plan-file>
-```
+before planning. Then invoke plan-feature supplying its documented inputs
+(see its "When invoked by another skill" section): `repository`,
+`feature_description` = the issue title + body + your Step 1 restatement,
+and `output_mode` = `comment-on-issue <number>` — it will not re-interview
+for supplied inputs, and in this mode it posts the plan on the existing
+issue, never creating a new issue or a plan PR.
 
 No implementation code is written on the feature path.
 
