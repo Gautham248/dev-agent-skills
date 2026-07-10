@@ -6,8 +6,14 @@ description: >
   implement Y", or "create a spec for Z". Reads the repository's knowledge graph
   to understand the existing codebase, then produces a structured markdown
   implementation plan that covers what to build, where it fits, what to change,
-  and what to watch out for. Does not write code. Saves the plan as a GitHub
-  issue or a file in the repo.
+  and what to watch out for. Does not write code. Saves the plan as a new
+  GitHub issue (default), a comment on an existing issue, or a file committed
+  to the repo — calling skills like investigate-issue select the mode
+  explicitly.
+compatibility: Requires graphify on PATH, an authenticated gh CLI, git, and network access to GitHub. python3 for the bundled path-verification script.
+metadata:
+  version: 2.0.0
+  category: workflow-automation
 ---
 
 <!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->
@@ -24,173 +30,170 @@ While using this skill, and especially when you finish, read and follow the self
 # Plan feature
 
 Produces a structured implementation plan for a new feature, grounded in the
-actual codebase. The plan is written before any code is touched.
+actual codebase via knowledge-graph queries. The plan is written before any
+code is touched — this skill writes no implementation code, ever.
 
 ## Prerequisites
 
 - `graphify` installed: `pip install graphifyy`
 - `gh` CLI authenticated: `gh auth login`
-- `GEMINI_API_KEY` (free at aistudio.google.com) — only needed if the repo
-  contains non-code files
+- `git` configured with access to the repository
+- An LLM API key for the configured backend, available in the environment —
+  only needed if the repo contains docs, images, or non-code files. Use
+  whichever provider is already configured for this deployment; do not
+  substitute a different provider's key (same rule as fix-bug — see
+  `fix-bug/references/edge-cases.md`, 2026-06-08, for why that fails).
+
+## When invoked by another skill
+
+This skill is composable. Its inputs are:
+
+| Input | Meaning |
+|---|---|
+| `repository` | `owner/repo`, or the current checkout |
+| `feature_description` | What to build and for whom, including constraints |
+| `output_mode` | `new-issue` (default) \| `comment-on-issue N` \| `file-in-repo` |
+
+If a calling skill (e.g. `investigate-issue`) already supplies any of these,
+do **not** re-ask the developer for them — run Step 1 only for whatever is
+still missing. Everything else in this skill applies unchanged, including the
+never-do list.
+
+## Step 0 — Determine the operating context
+
+Same decision as fix-bug's Step 0: are you already inside the target
+repository's own working directory, or are you the dev-agent service
+operating on a persistent clone (`/app/data/repos/<owner>__<repo>`)?
+
+- **Inside the repo's checkout:** skip cloning — work in place
+  (confirm with `git rev-parse --is-inside-work-tree`).
+- **dev-agent service:** use the persistent paths in
+  `references/graph-workflow.md`.
+- **No git repository and no repo named:** ask for `owner/repo`; do not
+  guess.
+
+Say which mode you're in before proceeding.
 
 ## Step 1 — Gather information
 
-Ask the developer for:
+Ask the developer for whatever wasn't already supplied (see "When invoked by
+another skill"):
 
-1. **Repository** — `owner/repo` format
+1. **Repository** — `owner/repo` format (skip if Step 0 found you inside it)
 2. **Feature description** — what should it do, who is it for
 3. **Any constraints** — tech stack preferences, things to avoid, deadline
-4. **Output format** — GitHub issue (default) or file in repo
+4. **Output mode** — `new-issue` (default) | `comment-on-issue N` |
+   `file-in-repo`
 
 Do not proceed without the repository and feature description.
 
-## Step 2 — Clone or pull the repository
+## Steps 2–3 — Clone/pull and build or reuse the knowledge graph
+
+Follow `references/graph-workflow.md`: persistent clone, graph keyed by HEAD
+sha, **reuse the graph when fresh, rebuild only when stale**. This is
+deliberately identical to fix-bug's Steps 2–3 so both skills share one graph
+per repository instead of each rebuilding its own.
+
+## Step 4 — Query the graph for context
+
+Run the four context queries from `references/graph-workflow.md` — related
+functionality, data layer, API/routing layer, UI layer — and read the most
+relevant files from each result before writing anything.
+
+## Step 5 — Write the plan, then verify its paths
+
+Fill `assets/plan-template.md`. Every file path the plan names must either
+exist in the actual codebase (found via the graph or read directly) or be
+explicitly listed under "Files to create" — never reference a file you
+haven't verified.
+
+That rule is enforced by a script, not trust. After drafting, write the plan
+to a file and run — this check is not optional:
 
 ```bash
-git clone https://github.com/<owner>/<repo>.git /tmp/agent-repos/<repo>
-# or
-git -C /tmp/agent-repos/<repo> checkout main && git pull origin main
+python3 scripts/verify_plan_paths.py <plan-file.md> <repo-dir>
 ```
 
-## Step 3 — Build the knowledge graph
+It errors on any "Files to change" path missing from the repo and any
+"Files to create" path that already exists. Fix the plan and re-run until it
+exits 0 — only then move to Step 6.
 
-```bash
-GEMINI_API_KEY=<key> graphify extract /tmp/agent-repos/<repo> \
-  --output /tmp/agent-repos/<repo>/graphify-out \
-  --no-browser
-```
+## Step 6 — Save the plan (by output mode)
 
-## Step 4 — Query the graph for relevant context
+Dispatch on the output mode — exact commands in
+`references/save-destinations.md`:
 
-Run multiple queries to build context before writing the plan:
-
-```bash
-# Find where similar features live
-graphify query "<feature name> or related functionality" \
-  --graph /tmp/agent-repos/<repo>/graphify-out/graph.json --budget 2000
-
-# Find the data layer
-graphify query "data models schema database" \
-  --graph /tmp/agent-repos/<repo>/graphify-out/graph.json --budget 2000
-
-# Find the API/routing layer
-graphify query "API routes endpoints handlers" \
-  --graph /tmp/agent-repos/<repo>/graphify-out/graph.json --budget 2000
-
-# Find the UI layer
-graphify query "components pages views" \
-  --graph /tmp/agent-repos/<repo>/graphify-out/graph.json --budget 2000
-```
-
-Read the most relevant files from each query result before writing the plan.
-
-## Step 5 — Write the plan
-
-Produce a structured markdown document using this template:
-
-```markdown
-# Feature plan: <feature name>
-
-**Repository:** <owner>/<repo>
-**Requested by:** @<developer>
-**Date:** <YYYY-MM-DD>
-
----
-
-## What this feature does
-
-<2–3 sentences. What problem does it solve? Who uses it?>
-
-## How it fits the existing codebase
-
-<Where does this feature belong in the current architecture? Which existing
-modules does it extend or rely on? Name the actual files found via the graph.>
-
-## Implementation steps
-
-### 1. <First step — e.g. Data model>
-<What to add or change. Name specific files.>
-
-### 2. <Second step — e.g. API / server layer>
-<What to add or change.>
-
-### 3. <Third step — e.g. UI / client layer>
-<What to add or change.>
-
-### 4. <Tests>
-<What to test and where.>
-
-## Files to change
-
-| File | Change |
-|---|---|
-| `<path>` | <what to add/modify> |
-
-## Files to create
-
-| File | Purpose |
-|---|---|
-| `<path>` | <what it will contain> |
-
-## Risks and open questions
-
-- <What could go wrong?>
-- <What needs a decision before building?>
-- <Any performance or security considerations?>
-
-## What this plan does NOT cover
-
-<Explicitly state what is out of scope so the developer knows where the edges are.>
-
----
-> 📋 This plan was generated by an AI agent based on the current codebase.
-> Verify file paths and assumptions before starting implementation.
-```
-
-## Step 6 — Save the plan
-
-**As a GitHub issue (default):**
-
-```bash
-gh issue create \
-  --repo <owner>/<repo> \
-  --title "Feature plan: <feature name>" \
-  --body "<plan content>" \
-  --label "planning"
-```
-
-**As a file in the repo:**
-
-```bash
-# Save to a plans/ directory in the repo
-mkdir -p /tmp/agent-repos/<repo>/plans
-cat > /tmp/agent-repos/<repo>/plans/<feature-slug>-plan.md << 'EOF'
-<plan content>
-EOF
-
-git -C /tmp/agent-repos/<repo> checkout -b agent/plan/<feature-slug>-<date>
-git -C /tmp/agent-repos/<repo> add plans/<feature-slug>-plan.md
-git -C /tmp/agent-repos/<repo> commit -m "[agent] plan: <feature name>"
-git -C /tmp/agent-repos/<repo> push origin agent/plan/<feature-slug>-<date>
-
-gh pr create \
-  --repo <owner>/<repo> \
-  --head agent/plan/<feature-slug>-<date> \
-  --base main \
-  --title "[Agent] Plan: <feature name>" \
-  --body "Feature implementation plan. See the file for details."
-```
+- **`new-issue`** → `gh issue create` with the `planning` label.
+- **`comment-on-issue N`** → `gh issue comment` on the existing issue.
+  Never create a new issue and never open a plan PR in this mode.
+- **`file-in-repo`** → `plans/<feature-slug>-plan.md` on an
+  `agent/plan/<feature-slug>-<date>` branch, proposed via a plan-only PR.
 
 ## Step 7 — Report back
 
 ```
-✓ Feature plan created: <issue-url or pr-url>
+✓ Feature plan created: <issue-url / comment-url / pr-url>
+  Mode:   <new-issue / comment-on-issue / file-in-repo>
+  Graph:  <reused existing / rebuilt>
   Covers: <3-bullet summary of what the plan includes>
 ```
+
+## If something goes wrong
+
+Before improvising a fix, check `references/edge-cases.md` — this may
+already be a documented, solved problem. If it's genuinely new once you're
+done, follow the self-improvement protocol and add it there.
+
+## Failure modes
+
+| Condition | Behaviour |
+|---|---|
+| Repository not found | Report and stop. Ask developer to verify the name. |
+| No git repository and none named | Ask for `owner/repo`. Do not guess. |
+| graphify extract fails | Report the exact error. Do not swap to a different provider's key. |
+| Graph queries return nothing relevant | Broaden the query once; if still empty, write the plan from direct file reading and say so in the plan's "Risks" section. |
+| `gh issue create`/`comment` fails | Report the exact gh output. Offer another mode as fallback only if the developer agrees — never switch silently. |
+| Feature description too thin to plan | Ask targeted questions. Do not pad the plan with invented requirements. |
 
 ## What the agent must NOT do
 
 - Write any implementation code.
-- Open a PR with code changes.
+- Open a PR with code changes (a `file-in-repo` PR contains only the plan file).
+- Create a new issue when `comment-on-issue` mode was requested.
 - Make assumptions about business requirements not stated by the developer.
 - Produce a plan that references files not found in the actual codebase.
+- Substitute a different provider's API key when the configured one fails.
+
+## Examples
+
+**Example 1 — direct invocation (default mode)**
+Developer says: "Plan the feature to add article tagging in acme/blog-platform"
+Actions: Step 0 finds no local checkout → dev-agent-service paths; Step 1
+interviews for constraints and confirms `new-issue` mode; Steps 2–4 reuse the
+existing graph (fresh at HEAD) and run the four context queries; Step 5 fills
+the template and `verify_plan_paths.py` exits 0; Step 6 creates the issue.
+Result: `✓ Feature plan created: https://github.com/acme/blog-platform/issues/58`
+— a `planning`-labeled issue, zero code written.
+
+**Example 2 — invoked by investigate-issue (comment-on-issue mode)**
+investigate-issue classified issue #41 as a feature and supplies all inputs:
+`repository` = acme/blog-platform, `feature_description` = issue title + body
++ restatement, `output_mode` = `comment-on-issue 41`.
+Actions: Step 1 asks the developer nothing (all inputs supplied); Steps 2–5 as
+above; Step 6 posts the plan with `gh issue comment 41 --body-file`.
+Result: the plan lands as a comment on issue #41 — no new issue, no PR, no
+re-interview.
+
+## See also
+
+- [`references/graph-workflow.md`](./references/graph-workflow.md) — clone,
+  graph build/reuse, and the four context queries (kept in sync with fix-bug)
+- [`references/save-destinations.md`](./references/save-destinations.md) —
+  exact commands for the three output modes
+- [`references/edge-cases.md`](./references/edge-cases.md) — accumulated
+  field experience; check it when something unexpected happens
+- [`assets/plan-template.md`](./assets/plan-template.md) — the plan document
+  template Step 5 fills in
+- [`scripts/verify_plan_paths.py`](./scripts/verify_plan_paths.py) — the
+  mandatory Step 5 path check (plan-file + repo-dir → exit 0 or a list of
+  phantom/mislabeled paths)

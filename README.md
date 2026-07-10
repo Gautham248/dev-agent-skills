@@ -8,12 +8,15 @@ in your AI IDE instantly.
 <!-- BEGIN dev-agent-skills skills table (managed by scripts/regen-readme.mjs -- do not edit this block by hand, edit the source SKILL.md instead and re-run setup.sh) -->
 | Skill | What it does |
 |---|---|
+| [`coding-standards`](./coding-standards/) | Company coding standards for frontend, backend, and database work. Use whenever writing or modifying applicat… |
 | [`eslint-rule-author`](./eslint-rule-author/) | Use when authoring or modifying rules in a custom ESLint plugin — adding a new rule, fixing a false positive… |
 | [`first-principles-review`](./first-principles-review/) | Critical, first-principles PR review that enumerates and challenges every assumption the author made, traces… |
 | [`fix-bug`](./fix-bug/) | Use when a developer reports a bug in a GitHub repository and wants an automated fix — phrases like "fix this… |
 | [`graphify`](./graphify/) | Use for any question about a codebase, its architecture, file relationships, or project content — especially… |
+| [`investigate-issue`](./investigate-issue/) | Use when a developer points at an existing GitHub issue and wants it investigated and taken forward — phrases… |
 | [`plan-feature`](./plan-feature/) | Use when a developer wants to plan a new feature before building it — phrases like "plan this feature", "writ… |
 | [`skill-add`](./skill-add/) | Use when the user wants to add, import, or install a new external skill from a git repository — phrases like… |
+| [`skill-factory`](./skill-factory/) | Interviews the requester through a structured clarification protocol, then designs, writes, and validates a n… |
 | [`skill-update`](./skill-update/) | Use when the user wants to update, refresh, sync, or pull the latest version of one or all tracked external s… |
 | [`sync-prs`](./sync-prs/) | Use when the user asks to sync, check, refresh, or triage their own open GitHub pull requests — phrases like… |
 | [`typescript-conventions`](./typescript-conventions/) | A TypeScript convention baseline for typing, validation, enum handling, imports, and naming — favoring types… |
