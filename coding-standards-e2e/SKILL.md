@@ -1,3 +1,25 @@
+---
+name: coding-standards-e2e
+description: >
+  Company conventions for writing Playwright end-to-end tests -- directory
+  structure, centralized test-ID selectors, suite-level setup helpers,
+  generated test-data configs, and the data-verification pattern. Use
+  whenever writing or modifying e2e/Playwright tests. Does NOT cover unit or
+  component tests, or which fields need data-testid values in the app itself
+  -- see coding-standards-frontend for that.
+---
+
+<!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->
+Before doing anything else in this skill, read and follow the clarification protocol at:
+../config/CLARIFICATION-PROTOCOL.md
+<!-- END dev-agent-skills clarification protocol -->
+
+<!-- BEGIN dev-agent-skills self-improvement protocol (managed by setup.sh -- do not edit this block manually; edit SELF-IMPROVEMENT-PROTOCOL.md instead) -->
+While using this skill, and especially when you finish, read and follow the self-improvement protocol at:
+../config/SELF-IMPROVEMENT-PROTOCOL.md
+(Append real edge cases to this skill's own references/edge-cases.md — create it if missing. See the protocol file for what qualifies.)
+<!-- END dev-agent-skills self-improvement protocol -->
+
 # E2E Test Writing Guidelines
 
 Generalized guidelines for writing end-to-end tests with Playwright. These conventions are project-agnostic: swap the feature names for your own domain and the same structure applies. Section 10 covers how to adapt the setup for projects that don't have authentication.

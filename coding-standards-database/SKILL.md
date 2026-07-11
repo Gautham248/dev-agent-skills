@@ -1,3 +1,26 @@
+---
+name: coding-standards-database
+description: >
+  Company database conventions -- schema-as-source-of-truth, model/field
+  naming, column type rules (decimal money, UTC timestamps), row-level
+  authorization policies, the policy-enforced vs raw client pattern,
+  query/selector patterns, transaction usage, and migrations. Use for any
+  schema change, migration, query, or database access-policy work. Does NOT
+  cover frontend or backend code style -- see the coding-standards dispatcher and the
+  other coding-standards-* skills for those.
+---
+
+<!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->
+Before doing anything else in this skill, read and follow the clarification protocol at:
+../config/CLARIFICATION-PROTOCOL.md
+<!-- END dev-agent-skills clarification protocol -->
+
+<!-- BEGIN dev-agent-skills self-improvement protocol (managed by setup.sh -- do not edit this block manually; edit SELF-IMPROVEMENT-PROTOCOL.md instead) -->
+While using this skill, and especially when you finish, read and follow the self-improvement protocol at:
+../config/SELF-IMPROVEMENT-PROTOCOL.md
+(Append real edge cases to this skill's own references/edge-cases.md — create it if missing. See the protocol file for what qualifies.)
+<!-- END dev-agent-skills self-improvement protocol -->
+
 # Database Standards
 
 Standalone database conventions extracted from this codebase, reusable in any project with a relational database — regardless of the application stack on top of it. Pair this with `project-structure.md` for full-stack projects, or use it alone for backend/data services.
