@@ -1,3 +1,26 @@
+---
+name: coding-standards-tanstack-query
+description: >
+  Company conventions for client-side server-state with TanStack Query (or
+  your framework's async-query library) -- QueryClient setup, option-factory
+  vs inline queries, generated CRUD hooks, query-key tiers, mutation and
+  invalidation patterns, and loading/error UX. Use whenever a task involves
+  fetching, caching, or mutating server data from the client. Does NOT cover
+  general component/store conventions -- see coding-standards-frontend for
+  those.
+---
+
+<!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->
+Before doing anything else in this skill, read and follow the clarification protocol at:
+../config/CLARIFICATION-PROTOCOL.md
+<!-- END dev-agent-skills clarification protocol -->
+
+<!-- BEGIN dev-agent-skills self-improvement protocol (managed by setup.sh -- do not edit this block manually; edit SELF-IMPROVEMENT-PROTOCOL.md instead) -->
+While using this skill, and especially when you finish, read and follow the self-improvement protocol at:
+../config/SELF-IMPROVEMENT-PROTOCOL.md
+(Append real edge cases to this skill's own references/edge-cases.md — create it if missing. See the protocol file for what qualifies.)
+<!-- END dev-agent-skills self-improvement protocol -->
+
 # TanStack Query Setup Guidelines
 
 Generalized guidelines for wiring client-side data fetching with TanStack Query. These conventions are project-agnostic: the examples use the Svelte adapter (`@tanstack/svelte-query`), but the same structure applies to React, Vue, or Solid — swap `createQuery` for `useQuery` and `$query.data` for your adapter's reactive access. Section 9 covers adapting the setup for projects without a generated CRUD layer, and Section 10 for apps without token-based auth or a native shell.

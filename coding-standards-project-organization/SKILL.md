@@ -1,31 +1,31 @@
-# Project Structure
-
-This document extracts the architectural decisions, folder organization, and coding standards used in this codebase so they can be reused as a template for future projects. Every rule is derived from patterns actually present in the repository. Conventions that exist but are not consistently enforced are explicitly marked as such.
-
-**How to apply this template:** the rules fall into two tiers.
-
-- **Universal rules** — language, naming, typing, error-handling, and organization conventions that apply to any TypeScript project. Adopt these everywhere.
-- **Conditional rules** — marked *(if applicable)* at the section or bullet level. They apply only when the project includes that layer (a UI, a database, background jobs, native builds, …). If a project lacks the layer, skip the section; do not force the dependency in.
-
-**Rules are written by category, not by tool.** Every rule names the *kind* of tool it governs (web framework, ORM, async-query library, schema validator, …); concrete tool names appear only as examples. The reference stack the standards were extracted from:
-
-| Category | Reference example |
-|---|---|
-| Web framework | SvelteKit (Svelte 5) |
-| Language | TypeScript (`strict`) |
-| ORM / schema toolkit | ZenStack |
-| Row-level policy layer + hooks generator | ZenStack |
-| Async server-state (query) library | TanStack Query |
-| Schema validation library | Zod |
-| Styling | Tailwind CSS + shadcn-style UI primitives |
-| Background-job library | pg-boss |
-| Native builds | Capacitor |
-| E2E / unit test runners | Playwright / Vitest |
-| Package manager | pnpm |
-
-**Code snippets throughout use the reference stack.** Read them as illustrations of the rule; translate the idiom to your project's equivalent tool — the principle transfers even when the tool does not.
-
 ---
+name: coding-standards-project-organization
+description: >
+  Company conventions for where code lives and how the project is
+  structured -- directory layout, file naming, universal code style and
+  TypeScript conventions, general testing-standards overview, best
+  practices, anti-patterns, and version-control workflow. Use when creating
+  a new file, deciding where something belongs, scaffolding a new area of
+  the project, or asking general "how do we structure X" questions not
+  covered by a more specific coding-standards-* skill. Does NOT replace
+  coding-standards-e2e for Playwright-specific test conventions, or the
+  domain skills for component/endpoint/schema rules.
+---
+
+<!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->
+Before doing anything else in this skill, read and follow the clarification protocol at:
+../config/CLARIFICATION-PROTOCOL.md
+<!-- END dev-agent-skills clarification protocol -->
+
+<!-- BEGIN dev-agent-skills self-improvement protocol (managed by setup.sh -- do not edit this block manually; edit SELF-IMPROVEMENT-PROTOCOL.md instead) -->
+While using this skill, and especially when you finish, read and follow the self-improvement protocol at:
+../config/SELF-IMPROVEMENT-PROTOCOL.md
+(Append real edge cases to this skill's own references/edge-cases.md — create it if missing. See the protocol file for what qualifies.)
+<!-- END dev-agent-skills self-improvement protocol -->
+
+# Coding Standards -- Project Organization
+
+Universal rules were already applied by the coding-standards dispatcher before this skill was invoked.
 
 ## 1. Directory Structure
 
@@ -194,124 +194,6 @@ export const userSelector = { include: { ... } } satisfies Prisma.UserDefaultArg
 - **Types derived from external packages (ORM, SDKs) are re-exported once** from a central types module; the rest of the app imports from there, never from the package directly.
 - `any` is avoided; unknown payload shapes use `Record<string, unknown>` or `unknown` with narrowing. Unused variables must be prefixed `_`.
 
-## 6. Component Standards *(if the project has a UI)*
-
-Skip this section entirely for API-only, CLI, or library projects.
-
-- **Three component tiers:**
-  1. `ui/` — design-system primitives (button, card, table, …), mostly generated (e.g. shadcn-style); consumed via namespace imports.
-  2. `elements/` — reusable app components (banners, spinners, stat cards).
-  3. Feature folders (`modals/`, `drawers/`, …) — components tied to one flow.
-- **Modals and drawers are data-driven**: a single global store holds `{ activeModalID, props, size }`; components open modals by ID via constants, never inline strings.
-- **Store factory pattern** for UI state — expose `subscribe` plus intention-revealing actions, not raw `set`. Shown with the reference framework's stores; a Zustand/Pinia/atom-based factory follows the same shape:
-
-```ts
-function createModalStore() {
-  const store = writable<ModalState>(defaultValue);
-  return { subscribe: store.subscribe, open: (...) => {...}, close: () => {...} };
-}
-export const modalStore = createModalStore();
-```
-
-- **Styling is utility-first** (e.g. Tailwind) with a class-merge helper for conditional composition. No component-scoped CSS files.
-- **Interactive elements get `data-testid` attributes from a central constants object** — E2E selectors never use raw strings. *(Applies only when E2E tests exist; harmless otherwise.)*
-- ⚠️ **Old vs new framework component style is not consistently enforced** (in the reference stack: legacy Svelte `export let` vs Svelte 5 runes `$props()`; the equivalent applies to any framework mid-migration). New code uses the current style; migrate legacy components opportunistically.
-
-## 7. Server / API Standards *(if the project exposes an HTTP API)*
-
-- **API endpoints are file-based** and export named HTTP-method handlers with the framework's handler type.
-- **Access tiers are encoded structurally in the routing layer**, not per-handler checks — in the reference framework, route groups `(public)`, `(secure)`, `(admin)`, `(premium)` with middleware inspecting the route ID; in other stacks, router mounts or module-level guards playing the same role. Placing a file in a group *is* the authorization declaration.
-- **Cross-cutting concerns are a sequence of small middleware handlers** (tracing → CORS/security headers → timing → auth → tier gating), each doing one thing.
-- **Request validation happens first, via shared helpers**, before any business logic (reference-framework handler shown; the shape is framework-agnostic):
-
-```ts
-export const POST: RequestHandler = async ({ locals: { db, user }, request }) => {
-  const payload = await validateRequest(request, createThingSchema);
-  if (!user) return error(401, 'Unauthorized');
-  ...
-  return json({ thing });
-};
-```
-
-- **Responses**: success via the framework's JSON helper with the resource under a named key; failures via the framework's error helper with a status and message. Error bodies always carry a `message` field.
-- **Request-scoped dependencies (DB client, user) arrive through the request context** (e.g. `locals`, `req.context`), injected by middleware — handlers never construct their own.
-- **Business logic lives in the service layer**; route handlers orchestrate: validate → authorize → call service → shape response. Long multi-step logic in a handler is a smell.
-- **Centralized URL builders** define every internal path and API URL as constants or typed factory functions (`api.thing.pick({ id })`). Neither client nor server hardcodes path strings.
-- **A standard security-header set is applied to every response by one middleware handler** — clickjacking protection (CSP `frame-ancestors` + `X-Frame-Options` fallback), `X-Content-Type-Options: nosniff`, a restrictive `Referrer-Policy` and `Permissions-Policy`, and HSTS set only when the request was already HTTPS (so local dev isn't broken). Each header carries a why-comment.
-
-### Background Jobs *(if the project has scheduled/queued work)*
-
-- **One file per job** (`jobs/<name>.job.ts`), each exporting exactly two functions: a worker registration (`registerXWorker`) and a scheduler (`scheduleX`).
-- **The queue name is a module-level constant** (`JOB_NAME`), used for the queue, the schedule, and singleton keys — never repeated as a literal.
-- **Jobs are thin**: the worker body is a single call into a service function; all logic lives in the service layer.
-- **Schedules are cron expressions pinned to UTC**, with a comment explaining the business reason for the timing (reference job library shown):
-
-```ts
-await pgBoss.schedule(JOB_NAME, '0 3 * * 2-6', {}, { tz: 'UTC', singletonKey: JOB_NAME });
-// Tue–Sat at 03:00 UTC, after the previous trading day's prices are ingested.
-```
-
-- **Singleton keys prevent duplicate scheduling/execution**; a deploy-kickoff `send` with a time-boxed singleton (`singletonSeconds`) runs the job once on deployment without double-firing across instances. Use your job library's equivalent deduplication primitive.
-
-## 8. Database Conventions *(if the project has a database)*
-
-Database conventions are maintained separately in [`database-standards.md`](./database-standards.md) so they can be adopted independently by backend-only or data-service projects. Skip for stateless services and pure frontends.
-
-## 9. State Management & Data Fetching *(if the project has a client-side UI)*
-
-- **Server state**: an async-query library (e.g. TanStack Query) with a single shared query client. Two sources of queries:
-  1. Generated model hooks *(if the schema toolchain provides them — e.g. ZenStack)*.
-  2. Hand-written queries whose fetch functions use the shared API wrapper and central URL builders.
-- **Query keys are centralized constants**, never inline strings; invalidation uses the same constants.
-- **Reusable query definitions** live in a queries module so multiple components share one definition.
-- **Client state**: the framework's reactive state primitive (stores, atoms, slices) for cross-cutting UI state (modal, drawer, user, notifications); a `persistent` store wrapper for state that must survive reloads. Component-local state stays in the component.
-- **Loading / error states** are handled from query flags in templates (loading → spinner, error → retry component with the error message).
-- **Mutation feedback via toasts** immediately at the call site.
-
-### API Call Conventions
-
-All HTTP calls from application code go through **one shared API wrapper module** — raw `fetch` in components, stores, or queries is not allowed. The wrapper's rules:
-
-- **One `api` object with a typed function per HTTP verb**, built from two factories (with-body / without-body) so each verb isn't hand-written:
-
-```ts
-export const api = {
-  get: fetchWrapperWithoutBody('GET'),
-  delete: fetchWrapperWithoutBody('DELETE'),
-  post: fetchWrapperWithBody('POST'),
-  put: fetchWrapperWithBody('PUT'),
-  patch: fetchWrapperWithBody('PATCH')
-} as const;
-```
-
-- **Callers declare both payload types**: `api.get<SuccessShape, ErrorShape>(url)` — the error type defaults to the app's standard error shape, so most call sites only name the success type.
-- **Every response is normalized to the discriminated union** `{ ok, status, data }`; callers branch on `response.ok` instead of try/catch. A `throwIfError(response)` helper converts to an exception (wrapping the full response in a custom error class) for contexts where throwing is more ergonomic (e.g. query functions).
-- **Protocol quirks are absorbed once, inside the wrapper**, never at call sites: empty `204` bodies, error responses without JSON bodies, cross-cutting error codes that trigger a global toast. If a call site is special-casing a status code, that logic probably belongs in the wrapper.
-- **Auth headers are attached in one place** (a module-level header store merged into every request), not passed by callers.
-- **Content negotiation is defaulted, not repeated**: JSON `Content-Type` is set automatically when a body exists; `Accept` defaults to JSON unless overridden.
-- **The fetch implementation is injectable** via an options parameter (`customFetch`), typed against a minimal `Fetch` interface — so the framework's request-scoped fetch or a test runner's fetch can be substituted without changing call sites.
-- **URLs come from the central URL-builder module**, and the base URL comes from public env config with a logged localhost fallback — callers never concatenate path strings.
-
-```ts
-const response = await api.get<PaperTradeAnalysisPayload>(URLS.api.paperTrade.pick({ id }));
-if (!response.ok) {
-  toast.error(response.data.message ?? 'Failed to fetch analysis.');
-  return;
-}
-// response.data is fully typed here
-```
-
-## 10. Error Handling (universal)
-
-- **Guard clauses for expected failures** (unauthorized, not found) — handled early, before business logic, using the framework's error mechanism where one exists.
-- **Normalized result objects instead of exceptions** at API boundaries: check `response.ok`, read a typed `message` from the body.
-- **Custom error classes** where an exception must carry structure (`class APIHTTPError extends Error` wrapping the full response).
-- **Per-item try/catch in batch loops** — one failed item logs and continues; the batch reports totals at the end.
-- **Telemetry-aware error paths** *(if tracing is configured)*: spans record exceptions and set error status in catch blocks, then rethrow.
-- **Logging discipline**: `console.error` for failures with the caught error object, `console.info` for lifecycle events, both with a `[context]:` prefix. `console.log` is lint-banned outside scripts.
-- User-facing errors are short, actionable sentences; raw error internals are never shown to users.
-- Retry is user-initiated — no automatic retry loops in application code.
-
 ## 11. Configuration & Environment Variables (universal)
 
 - **Names are `UPPER_SNAKE_CASE`**, prefixed by domain (`STRIPE_*`, `POSTGRES_*`). Anything exposed to the client **must** carry the framework's public prefix (e.g. `PUBLIC_*` in SvelteKit, `NEXT_PUBLIC_*` in Next.js, `VITE_*` in Vite).
@@ -378,3 +260,4 @@ Patterns that conflict with the conventions above and must be avoided. Layer-spe
 - **Work flows through pull requests** into an integration branch (`staging`), which is merged to the default branch for release — no direct commits to either.
 - **Pre-commit hooks run the cheap checks** (lint with autofix + spell-check on staged files); CI is not the first line of defense.
 - **A `.git-blame-ignore-revs` file** keeps bulk-formatting commits out of `git blame`.
+
