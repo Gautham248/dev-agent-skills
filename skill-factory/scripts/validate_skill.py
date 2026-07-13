@@ -74,13 +74,16 @@ def validate(skill_path: Path, roster: set[str]):
             f"under references/.",
         )
 
-    # --- No README.md inside the skill folder ---
-    if (skill_path / "README.md").exists():
-        fail(
-            errors,
-            "README.md found inside the skill folder. All instructions belong in SKILL.md "
-            "or references/ — a repo-level README for human visitors is a separate concern "
-            "and doesn't belong inside the skill's own folder.",
+    # --- README.md inside the skill folder ---
+    # Downgraded from error to warning: CONTRIBUTING.md's own Step 3 instructs every
+    # contributor to write one ("The README is for humans"), and the majority of
+    # existing skills in this repo have one. This is now a nudge for skills that are
+    # missing one, not a rejection of the ones that have it.
+    if not (skill_path / "README.md").exists():
+        warn(
+            warnings,
+            "No README.md found in this skill folder. CONTRIBUTING.md's Step 3 asks every "
+            "skill to have one for human visitors — consider adding one.",
         )
 
     content = skill_md.read_text(encoding="utf-8")
@@ -156,12 +159,22 @@ def validate(skill_path: Path, roster: set[str]):
         elif len(compatibility) > 500:
             fail(errors, f"'compatibility' is {len(compatibility)} characters; maximum is 500.")
 
-    # --- overall angle-bracket scan of frontmatter block (belt and suspenders) ---
-    if match and ("<" in match.group(1) or ">" in match.group(1)):
-        # Only warn here since the description-specific check above is authoritative;
-        # this catches angle brackets in other fields like metadata values.
-        warn(warnings, "Angle brackets found somewhere in the frontmatter block — verify none are in "
-                        "user-facing fields like description or metadata values.")
+    # --- angle-bracket scan of frontmatter VALUES (belt and suspenders) ---
+    # Fixed: this used to scan the raw pre-YAML text of the whole frontmatter block,
+    # which false-positives on legitimate YAML syntax -- most commonly the '>' block-
+    # scalar folding indicator in 'description: >', which is how most skills in this
+    # repo write a multi-line description. Scanning the *parsed* values instead (skipping
+    # 'description', already checked above) keeps the original intent -- catching angle
+    # brackets in other fields like 'metadata' -- without flagging YAML syntax itself.
+    other_values = [
+        str(v) for k, v in frontmatter.items()
+        if k != "description" and isinstance(v, (str, int, float))
+    ]
+    offending = [v for v in other_values if "<" in v or ">" in v]
+    if offending:
+        warn(warnings, "Angle brackets found in a non-description frontmatter field "
+                        f"(e.g. {offending[0]!r}) — verify it's not user-facing or "
+                        "mistakable for injected instructions.")
 
     # --- size guidance ---
     line_count = content.count("\n") + 1

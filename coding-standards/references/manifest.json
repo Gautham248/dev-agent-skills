@@ -1,6 +1,6 @@
 {
-  "_comment": "Stable routing table: domain name -> sub-skill + how to detect it. Only coding-standards/SKILL.md is told this file exists -- no sub-skill's SKILL.md references it, so it functions as master-only without needing any permission.skill config. Update this when a new coding-standards-* sub-skill is added; the per-project 'which domains actually apply here' decision is NOT stored here -- that's re-detected fresh every session (see SKILL.md).",
-  "version": 1,
+  "_comment": "Stable routing table: domain name -> sub-skill + how to detect it. Only coding-standards/SKILL.md is told this file exists -- no sub-skill's SKILL.md references it, so it functions as master-only without needing any permission.skill config. Update this when a new coding-standards-* sub-skill is added; the per-project 'which domains actually apply here' decision is NOT stored here -- that's re-detected fresh every session (see SKILL.md). path_patterns classify files returned by a graphify query into a domain -- this is what makes Step 3's graph-grounded matching possible. depends_on expresses that a domain structurally requires another to exist (e.g. tanstack-query needs a frontend to attach a query client to) -- used to surface the deeper mismatch, not just 'library not installed'.",
+  "version": 2,
   "domains": [
     {
       "domain": "frontend",
@@ -13,7 +13,11 @@
       "project_signals": [
         "package.json dependency: react, svelte, vue, solid-js, or @angular/core",
         "a components/, src/routes/, or src/lib/components/ directory"
-      ]
+      ],
+      "path_patterns": [
+        "src/components/", "src/lib/components/", ".tsx", ".svelte", ".vue"
+      ],
+      "depends_on": []
     },
     {
       "domain": "backend",
@@ -25,7 +29,11 @@
       "project_signals": [
         "package.json dependency: express, hono, fastify, koa, or next (for API routes)",
         "a src/routes/api/, src/server/, or api/ directory"
-      ]
+      ],
+      "path_patterns": [
+        "src/routes/api/", "src/server/", "api/", "middleware"
+      ],
+      "depends_on": []
     },
     {
       "domain": "database",
@@ -37,7 +45,11 @@
       "project_signals": [
         "a schema.zmodel, schema.prisma, or migrations/ file or directory",
         "package.json dependency: prisma, drizzle-orm, or zenstack"
-      ]
+      ],
+      "path_patterns": [
+        "schema.prisma", "schema.zmodel", "migrations/", "drizzle/", "prisma/"
+      ],
+      "depends_on": []
     },
     {
       "domain": "tanstack-query",
@@ -48,7 +60,11 @@
       ],
       "project_signals": [
         "package.json dependency matching @tanstack/*-query"
-      ]
+      ],
+      "path_patterns": [
+        "useQuery", "useMutation", "queryClient", "queryKey"
+      ],
+      "depends_on": ["frontend"]
     },
     {
       "domain": "e2e",
@@ -59,7 +75,11 @@
       "project_signals": [
         "package.json dependency: @playwright/test",
         "a playwright.config.ts file, or a tests/ or e2e/ directory containing *.spec.ts files"
-      ]
+      ],
+      "path_patterns": [
+        "tests/", "e2e/", ".spec.ts", "playwright.config"
+      ],
+      "depends_on": []
     },
     {
       "domain": "project-organization",
@@ -71,7 +91,9 @@
       ],
       "project_signals": [
         "always potentially applicable -- this domain is gated by the task signal, not a project signal"
-      ]
+      ],
+      "path_patterns": [],
+      "depends_on": []
     }
   ]
 }

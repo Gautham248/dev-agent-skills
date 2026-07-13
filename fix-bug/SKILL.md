@@ -3,7 +3,7 @@ name: fix-bug
 description: >
   Use when a developer reports a bug in a GitHub repository and wants an
   automated fix — phrases like "fix this bug", "there's an error in production",
-  "something is broken in <repo>", or "open a PR to fix <issue>". Also use for
+  "something is broken in the payments repo", or "open a PR to fix issue 42". Also use for
   the same kind of bug report in a local, not-yet-GitHub-connected repository —
   the clarification and investigation steps still apply; only the clone/PR
   mechanics differ (see Step 0). Queries the repository's knowledge graph to
