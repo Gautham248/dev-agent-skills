@@ -2,6 +2,8 @@
 
 This guide covers how to communicate with the agent when using skills from this repo, what to expect at each stage of a session, and how to get consistently good results. The biggest gains come not from learning special syntax but from understanding what the system is actually doing and aligning your communication with that.
 
+> Looking for what changed recently, or why something behaves the way it does? See [`HISTORY.md`](./HISTORY.md).
+
 ---
 
 ## The mental model
@@ -16,6 +18,8 @@ When you start a session, the agent is not reading your request in isolation. It
 6. **After finishing, record any real edge cases** the skill didn't cover into that skill's `references/edge-cases.md`.
 
 Understanding this sequence tells you what to expect and what is and isn't your job to specify.
+
+**One addition to this sequence for code-writing tasks:** somewhere in step 5, before or while the actual code gets written, `coding-standards` fires — but it isn't a workflow skill like `fix-bug` or `plan-feature`, and step 3 above doesn't cover it. It's a separate kind of skill that applies alongside whichever workflow skill loaded. See "Master/dispatcher skills" below for what that actually looks like.
 
 ---
 
@@ -66,6 +70,30 @@ Or name it in natural language (these harnesses will usually auto-select based o
 ```
 Fix the broken App Store link on the hero section — it should point to <new-url>.
 ```
+
+**You generally don't need to prompt `coding-standards` yourself at all.** It's designed to fire on its own once a workflow skill starts writing code, the same way OpenCode's auto-selection picks up any other skill. See below.
+
+---
+
+## Master/dispatcher skills — how `coding-standards` works
+
+`coding-standards` is architecturally different from `fix-bug`, `plan-feature`, or any other skill in this repo. It's a **dispatcher**: rather than containing the actual standards itself, it investigates the current project, decides which domain-specific standards genuinely apply, and hands off to the matching skill(s) — `coding-standards-frontend`, `coding-standards-backend`, `coding-standards-database`, `coding-standards-tanstack-query`, `coding-standards-e2e`, `coding-standards-project-organization`.
+
+**What you'll actually see when this fires:** once a workflow skill reaches the point of writing or modifying application code, you may notice the agent briefly checking things like `package.json` or looking for a schema file — that's `coding-standards` determining which domains this project actually has, before deciding which standards apply. This is expected, not a detour; it's how the dispatcher avoids applying, say, database conventions to a project that doesn't have a database.
+
+**What you don't need to do:** you never need to name `coding-standards` or its sub-skills explicitly in a normal request. If you're fixing a bug in an API endpoint, the relevant backend standards get applied as part of the normal flow — the same way `fix-bug` itself applies without you separately invoking it.
+
+**When it might ask you something:** if the dispatcher finds a genuine mismatch — e.g. your request mentions TanStack Query but the project has no frontend framework at all — it will ask one grounded question about that specific mismatch, same style as any other clarifying question in this system (see "The clarification step" below). This is rare; most of the time dispatch happens silently and correctly.
+
+---
+
+## Session-memory — when the agent skips a check and says so
+
+A small number of skills (`coding-standards`, `sync-prs` — see [`06-REFERENCE.md`](./06-REFERENCE.md) for the current list) have specific, individual steps marked as safe to skip if the same check already ran earlier in the same conversation. When this happens, the agent will say so explicitly, something like:
+
+> "Already confirmed earlier this session that this project uses react + prisma — skipping re-detection."
+
+**This is expected, correct behavior, not the agent cutting corners.** It only applies to steps that are pure fact-gathering (nothing changes as a result of the check itself) and only within one continuous conversation — a brand new session always re-checks fresh. If anything happened in between that could plausibly have changed the answer (a new dependency installed, a relevant file edited), the agent re-runs the check instead of reusing it — you should never see a reused answer that's actually gone stale. If you ever suspect a reused fact is wrong, just ask it to re-check — there's no cost to that beyond the redundant check itself.
 
 ---
 
@@ -121,6 +149,16 @@ The agent will revise the plan and re-present it. You will see the plan again be
 
 ---
 
+## Committing, pushing, and PRs are opt-in, not automatic
+
+`fix-bug` **stops at the edited file by default.** It does not commit, push, or open a pull request unless you explicitly ask it to — this is a deliberate change from earlier behavior (see [`HISTORY.md`](./HISTORY.md)). As part of the Step 1 clarification questions, it will ask your preference:
+
+> "After I make this fix, do you want me to commit and push it and open a PR, or just leave the edited file for you to review and commit yourself?"
+
+Answer this the same way you'd answer any other clarifying question. If you don't answer it, or say nothing either way, the agent will **not** commit — it reports the change it made and stops. If you want a PR opened, say so explicitly, either up front in your original request ("...and open a PR when done") or when asked.
+
+---
+
 ## What a good session looks like
 
 Here is an annotated example of a correct full session flow:
@@ -136,15 +174,15 @@ The "Download on App Store" button link is broken — it's still pointing to the
 
 **You:** "Just the hero."
 
-**Agent (turn 2):** Presents the plan. What it will do (update line 47), what it won't do (touch AppBanner), what done looks like (button works, tsc clean, no other changes).
+**Agent (turn 2):** Presents the plan, including the commit/push preference question from Step 1. What it will do (update line 47), what it won't do (touch AppBanner), what done looks like (button works, tsc clean, no other changes) — and asks whether you want this committed, pushed, and opened as a PR, or left as an edited file for you to handle.
 
-**You:** "Yes, go ahead."
+**You:** "Yes, go ahead — and yes, open a PR."
 
-**Agent (turn 3):** Makes the change, runs `tsc --noEmit`, reports the result, shows the diff.
+**Agent (turn 3):** Makes the change, applies any relevant `coding-standards` conventions along the way (silently, unless something needed clarifying), runs `tsc --noEmit`, commits, pushes, opens the PR, and reports the result with a link.
 
 **Agent (turn 4, end of session):** Checks whether any real edge case was encountered that the skill didn't cover. If yes, appends an entry to `fix-bug/references/edge-cases.md`. If no genuine edge case, does nothing.
 
-Total confirmation cycles: 1. Total questions asked: 1. Total unexpected edits: 0.
+Total confirmation cycles: 1. Total questions asked: 2 (App Store location, commit/push preference — the latter could also be answered up front in the original prompt to skip being asked). Total unexpected edits: 0.
 
 ---
 
@@ -169,6 +207,16 @@ Total confirmation cycles: 1. Total questions asked: 1. Total unexpected edits: 
 **What to do:** If the change is wrong, ask it to revert: "Revert those changes, I hadn't confirmed yet." If the change happens to be correct, note it as a protocol violation for future reference but proceed.
 
 **Prevention:** Make sure your prior messages don't include phrases like "just do it" or "go ahead and X" before the plan is presented — those can be misread as pre-authorization. Wait for the plan, then confirm.
+
+### The agent commits or pushes without asking
+
+**Symptom:** A commit or PR shows up that you never explicitly asked for.
+
+**Why it happens:** A protocol violation — `fix-bug`'s default is to stop at the edited file, and it should only commit/push after you've explicitly opted in via the Step 1 question. Treat this the same as any other protocol violation.
+
+**What to do:** `git log` to see what was committed, and if the PR shouldn't exist, close it and revert the branch. Note it for future reference the same as any other unexpected-action case.
+
+**Prevention:** Same as the plan-acted-immediately case — avoid pre-authorizing language, and if you do want it to commit/push, say so explicitly rather than assuming it's the default.
 
 ### The agent asks for a file path or line number
 
@@ -199,6 +247,12 @@ Fix [specific symptom] — [what it should do instead].
 ```
 Fix the broken App Store link on the hero section — it should open https://apps.apple.com/...
 ```
+
+**Bug fixes where you already know you want it shipped:**
+```
+Fix [specific symptom] — [what it should do instead]. Commit, push, and open a PR when done.
+```
+Stating this up front skips the Step 1 question and saves a round trip if you already know you want it.
 
 **Feature planning:**
 ```
@@ -243,13 +297,19 @@ git diff --stat
 ```
 Compare against what the plan said. If the diff includes files not mentioned in the plan, ask the agent to explain and revert the unexpected changes.
 
-**3. Did TypeScript compile clean after?**
+**3. Did the agent commit/push only if you actually asked it to?**
+```bash
+git log --oneline -3
+```
+If there's a commit you didn't explicitly authorize, that's a protocol violation — see "What bad sessions look like" above.
+
+**4. Did TypeScript compile clean after?**
 ```bash
 npx tsc --noEmit; echo "exit: $?"
 ```
 A clean session should leave exit 0. Any new errors introduced by the change need to be fixed before committing.
 
-**4. Did the self-improvement step fire correctly?**
+**5. Did the self-improvement step fire correctly?**
 ```bash
 # For whichever skill was used:
 cat fix-bug/references/edge-cases.md 2>/dev/null || echo "no entries yet"
