@@ -24,7 +24,7 @@ except ImportError:
     yaml = None
 
 ALLOWED_FRONTMATTER_KEYS = {
-    "name", "description", "license", "compatibility", "allowed-tools", "metadata"
+    "name", "description", "license", "compatibility", "allowed-tools", "session-memory", "metadata"
 }
 
 # Known dev-agent-skills roster, kept here so a fresh clone still gets a useful
@@ -115,6 +115,23 @@ def validate(skill_path: Path, roster: set[str]):
     if unexpected:
         fail(errors, f"Unexpected frontmatter key(s): {', '.join(sorted(unexpected))}. "
                       f"Allowed: {', '.join(sorted(ALLOWED_FRONTMATTER_KEYS))}")
+
+    # --- session-memory ---
+    if "session-memory" in frontmatter:
+        sm_value = frontmatter["session-memory"]
+        if not isinstance(sm_value, bool):
+            fail(errors, f"'session-memory' must be a boolean (true/false), got {sm_value!r}.")
+        elif sm_value is True:
+            has_marker = bool(re.search(r"Session-reusable:", body))
+            if not has_marker:
+                warn(warnings, "'session-memory: true' is set, but no step in this skill's body is marked "
+                                "'Session-reusable:' -- the flag alone does nothing. Either mark at least one "
+                                "qualifying step, or remove the flag.")
+    else:
+        if re.search(r"Session-reusable:", body):
+            warn(warnings, "Found a 'Session-reusable:' marker in the body, but 'session-memory: true' isn't "
+                            "set in frontmatter -- setup.sh won't inject the protocol pointer, so this marker "
+                            "won't mean anything to an agent reading it. Add 'session-memory: true'.")
 
     # --- name ---
     name = str(frontmatter.get("name", "")).strip()

@@ -14,6 +14,7 @@ description: >
   conventions belong to typescript-conventions and webapp-conventions -- this
   skill owns only company-specific rules, and on any conflict the company
   rule wins.
+session-memory: true
 ---
 
 <!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->
@@ -26,6 +27,12 @@ While using this skill, and especially when you finish, read and follow the self
 ../config/SELF-IMPROVEMENT-PROTOCOL.md
 (Append real edge cases to this skill's own references/edge-cases.md — create it if missing. See the protocol file for what qualifies.)
 <!-- END dev-agent-skills self-improvement protocol -->
+
+<!-- BEGIN dev-agent-skills session-memory protocol (managed by setup.sh -- do not edit this block manually; edit SESSION-MEMORY-PROTOCOL.md instead) -->
+This skill opted in to session-memory (session-memory: true). Whenever you reach a step
+marked 'Session-reusable:' below, read and follow the session-memory protocol at:
+../config/SESSION-MEMORY-PROTOCOL.md
+<!-- END dev-agent-skills session-memory protocol -->
 
 # Coding Standards (dispatcher)
 
@@ -72,9 +79,16 @@ of domain. Keep them in mind for the rest of this task.
 
 ## Step 2 -- Detect which domains this project actually has
 
-Run these checks now (all cheap -- file reads and greps, not a graph build;
-there is nothing here worth caching between sessions, just redo it every
-time). Read `references/manifest.json` for the authoritative, current list of
+**Session-reusable:** if you've already run this exact detection earlier in
+this conversation, and nothing since then would plausibly change it (no new
+dependency installed, no schema file added/removed), state that explicitly
+and reuse the earlier result instead of re-running the checks below — see
+`SESSION-MEMORY-PROTOCOL.md`. This is about *within* one session only; there
+is still nothing here worth persisting *across* sessions via a cache file —
+each of these checks is a handful of milliseconds, so a brand new session
+just re-runs them fresh once, same as before.
+
+Read `references/manifest.json` for the authoritative, current list of
 domains and their `project_signals` -- do not hardcode the list here, the
 manifest is the source of truth and may have grown since this was written.
 
