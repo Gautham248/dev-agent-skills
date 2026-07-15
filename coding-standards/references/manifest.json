@@ -1,0 +1,115 @@
+{
+  "_comment": "Stable routing table: domain name -> sub-skill + how to detect it. Only coding-standards/SKILL.md is told this file exists -- no sub-skill's SKILL.md references it, so it functions as master-only without needing any permission.skill config. Update this when a new coding-standards-* sub-skill is added; the per-project 'which domains actually apply here' decision is NOT stored here -- that's re-detected fresh every session (see SKILL.md). path_patterns classify files (from a graphify query, or from graphify-out/.graphify_stack.json's notable_files/notable_dirs) into a domain. dependency_patterns match against .graphify_stack.json's dependencies list -- this is what Step 2 checks first, falling back to direct package.json/find commands only if that file doesn't exist. depends_on expresses that a domain structurally requires another to exist (e.g. tanstack-query needs a frontend to attach a query client to) -- used to surface the deeper mismatch, not just 'library not installed'. project_signals stay as human-readable prose, used only by the fallback path when interpreting raw command output directly. None of these lists are or can be exhaustive -- new tools appear constantly. Extend them when a real project surfaces a gap (see HISTORY.md's round-2 entry for the TypeORM/Sequelize gap this addressed) rather than trying to enumerate everything upfront.",
+  "version": 3,
+  "domains": [
+    {
+      "domain": "frontend",
+      "skill": "coding-standards-frontend",
+      "task_signals": [
+        "building or modifying a page, component, modal, or drawer",
+        "client-side store or client state",
+        "styling"
+      ],
+      "project_signals": [
+        "package.json dependency: react, svelte, vue, solid-js, @angular/core, preact, or astro",
+        "a components/, src/routes/, or src/lib/components/ directory"
+      ],
+      "path_patterns": [
+        "src/components/", "src/lib/components/", ".tsx", ".jsx", ".svelte", ".vue", ".astro"
+      ],
+      "dependency_patterns": [
+        "react", "svelte", "vue", "solid-js", "@angular/core", "preact", "astro"
+      ],
+      "depends_on": []
+    },
+    {
+      "domain": "backend",
+      "skill": "coding-standards-backend",
+      "task_signals": [
+        "adding or changing an API endpoint or middleware",
+        "a background or cron job"
+      ],
+      "project_signals": [
+        "package.json dependency: express, hono, fastify, koa, or next (for API routes)",
+        "a src/routes/api/, src/server/, or api/ directory"
+      ],
+      "path_patterns": [
+        "src/routes/api/", "src/server/", "api/", "middleware"
+      ],
+      "dependency_patterns": [
+        "express", "hono", "fastify", "koa", "next"
+      ],
+      "depends_on": []
+    },
+    {
+      "domain": "database",
+      "skill": "coding-standards-database",
+      "task_signals": [
+        "a schema change, migration, or database query",
+        "database access-policy / authorization work"
+      ],
+      "project_signals": [
+        "a schema.zmodel, schema.prisma, or migrations/ file or directory",
+        "package.json dependency: prisma, drizzle-orm, zenstack, typeorm, sequelize, knex, or mongoose"
+      ],
+      "path_patterns": [
+        "schema.prisma", "schema.zmodel", "migrations/", "drizzle/", "prisma/", "typeorm/", "models/"
+      ],
+      "dependency_patterns": [
+        "prisma", "drizzle-orm", "zenstack", "typeorm", "sequelize", "knex", "mongoose"
+      ],
+      "depends_on": []
+    },
+    {
+      "domain": "tanstack-query",
+      "skill": "coding-standards-tanstack-query",
+      "task_signals": [
+        "fetching, caching, or mutating server data from the client",
+        "explicit mention of TanStack Query, react-query, or an equivalent async-query/server-state library"
+      ],
+      "project_signals": [
+        "package.json dependency matching @tanstack/*-query"
+      ],
+      "path_patterns": [
+        "useQuery", "useMutation", "queryClient", "queryKey"
+      ],
+      "dependency_patterns": [
+        "@tanstack/react-query", "@tanstack/vue-query", "@tanstack/svelte-query", "@tanstack/solid-query", "@tanstack/query-core"
+      ],
+      "depends_on": ["frontend"]
+    },
+    {
+      "domain": "e2e",
+      "skill": "coding-standards-e2e",
+      "task_signals": [
+        "writing or modifying end-to-end / Playwright tests"
+      ],
+      "project_signals": [
+        "package.json dependency: @playwright/test",
+        "a playwright.config.ts file, or a tests/ or e2e/ directory containing *.spec.ts files"
+      ],
+      "path_patterns": [
+        "tests/", "e2e/", ".spec.ts", "playwright.config"
+      ],
+      "dependency_patterns": [
+        "@playwright/test"
+      ],
+      "depends_on": []
+    },
+    {
+      "domain": "project-organization",
+      "skill": "coding-standards-project-organization",
+      "task_signals": [
+        "creating a new file and deciding where it belongs",
+        "scaffolding a new area of the project",
+        "general 'how do we structure X' questions"
+      ],
+      "project_signals": [
+        "always potentially applicable -- this domain is gated by the task signal, not a project signal"
+      ],
+      "path_patterns": [],
+      "dependency_patterns": [],
+      "depends_on": []
+    }
+  ]
+}

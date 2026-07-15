@@ -70,7 +70,8 @@ strip_managed_block() {
 inject_protocol_pointers() {
   local clar_path="$SKILLS_DIR/config/CLARIFICATION-PROTOCOL.md"
   local si_path="$SKILLS_DIR/config/SELF-IMPROVEMENT-PROTOCOL.md"
-  # Written into SKILL.md as a relative path, not $clar_path/$si_path
+  local sm_path="$SKILLS_DIR/config/SESSION-MEMORY-PROTOCOL.md"
+  # Written into SKILL.md as a relative path, not $clar_path/$si_path/$sm_path
   # (which stay absolute, above, only for the existence-check below).
   # Every skill lives at exactly one level of nesting under $SKILLS_DIR
   # (<repo-root>/<skill-name>/SKILL.md), so ../config/ from any SKILL.md
@@ -81,18 +82,23 @@ inject_protocol_pointers() {
   # whoever last ran setup.sh on their own machine.
   local clar_rel="../config/CLARIFICATION-PROTOCOL.md"
   local si_rel="../config/SELF-IMPROVEMENT-PROTOCOL.md"
+  local sm_rel="../config/SESSION-MEMORY-PROTOCOL.md"
   local clar_begin="<!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->"
   local clar_end="<!-- END dev-agent-skills clarification protocol -->"
   local si_begin="<!-- BEGIN dev-agent-skills self-improvement protocol (managed by setup.sh -- do not edit this block manually; edit SELF-IMPROVEMENT-PROTOCOL.md instead) -->"
   local si_end="<!-- END dev-agent-skills self-improvement protocol -->"
+  local sm_begin="<!-- BEGIN dev-agent-skills session-memory protocol (managed by setup.sh -- do not edit this block manually; edit SESSION-MEMORY-PROTOCOL.md instead) -->"
+  local sm_end="<!-- END dev-agent-skills session-memory protocol -->"
 
-  local have_clar="true" have_si="true"
+  local have_clar="true" have_si="true" have_sm="true"
   [ -f "$clar_path" ] || { echo "  ⚠️  CLARIFICATION-PROTOCOL.md not found at $clar_path — skipping that injection for all skills."; have_clar="false"; }
   [ -f "$si_path" ] || { echo "  ⚠️  SELF-IMPROVEMENT-PROTOCOL.md not found at $si_path — skipping that injection for all skills."; have_si="false"; }
-  if [ "$have_clar" = "false" ] && [ "$have_si" = "false" ]; then return; fi
+  [ -f "$sm_path" ] || have_sm="false"
+  if [ "$have_clar" = "false" ] && [ "$have_si" = "false" ] && [ "$have_sm" = "false" ]; then return; fi
 
   local clar_injected=0 clar_refreshed=0
   local si_injected=0 si_refreshed=0
+  local sm_injected=0 sm_refreshed=0 sm_removed=0 sm_opted_in=0
   local skipped=0
   local legacy_footer_skills=()
 
@@ -102,32 +108,46 @@ inject_protocol_pointers() {
     skill_name=$(basename "$skill_dir")
     [ -f "$skill_md" ] || continue
 
-    local had_clar="false" had_si="false"
+    local had_clar="false" had_si="false" had_sm="false"
     grep -qF "$clar_begin" "$skill_md" && had_clar="true"
     grep -qF "$si_begin" "$skill_md" && had_si="true"
+    grep -qF "$sm_begin" "$skill_md" && had_sm="true"
     if grep -qE '^## Self-improvement( |$)' "$skill_md"; then
       legacy_footer_skills+=("$skill_name")
     fi
 
-    local stripped1 stripped2
+    local stripped1 stripped2 stripped3
     stripped1=$(mktemp)
     stripped2=$(mktemp)
+    stripped3=$(mktemp)
     strip_managed_block "$skill_md" "$clar_begin" "$clar_end" > "$stripped1"
     strip_managed_block "$stripped1" "$si_begin" "$si_end" > "$stripped2"
+    strip_managed_block "$stripped2" "$sm_begin" "$sm_end" > "$stripped3"
 
     # Frontmatter is delimited by the first two lines that are exactly "---".
     local second_dash
-    second_dash=$(grep -n '^---$' "$stripped2" | head -2 | tail -1 | cut -d: -f1)
+    second_dash=$(grep -n '^---$' "$stripped3" | head -2 | tail -1 | cut -d: -f1)
 
     if [ -z "$second_dash" ]; then
-      echo "  ⚠️  $skill_name: SKILL.md has no recognizable YAML frontmatter — left untouched. Add frontmatter (name/description) for either protocol to apply."
-      rm -f "$stripped1" "$stripped2"
+      echo "  ⚠️  $skill_name: SKILL.md has no recognizable YAML frontmatter — left untouched. Add frontmatter (name/description) for any protocol to apply."
+      rm -f "$stripped1" "$stripped2" "$stripped3"
       skipped=$((skipped + 1))
       continue
     fi
 
+    # session-memory is opt-in per skill, unlike clarification/self-improvement
+    # which apply to every skill unconditionally. Only this skill's own
+    # frontmatter (the region up to $second_dash) decides whether it gets the
+    # pointer — a skill that removes the flag on a later run correctly loses
+    # the pointer too, since it's simply not re-added below.
+    local want_sm="false"
+    if [ "$have_sm" = "true" ] && head -n "$second_dash" "$stripped3" | grep -qiE '^session-memory:[[:space:]]*true[[:space:]]*$'; then
+      want_sm="true"
+      sm_opted_in=$((sm_opted_in + 1))
+    fi
+
     {
-      head -n "$second_dash" "$stripped2"
+      head -n "$second_dash" "$stripped3"
       if [ "$have_clar" = "true" ]; then
         echo ""
         echo "$clar_begin"
@@ -143,17 +163,30 @@ inject_protocol_pointers() {
         echo "(Append real edge cases to this skill's own references/edge-cases.md — create it if missing. See the protocol file for what qualifies.)"
         echo "$si_end"
       fi
+      if [ "$want_sm" = "true" ]; then
+        echo ""
+        echo "$sm_begin"
+        echo "This skill opted in to session-memory (session-memory: true). Whenever you reach a step"
+        echo "marked 'Session-reusable:' below, read and follow the session-memory protocol at:"
+        echo "$sm_rel"
+        echo "$sm_end"
+      fi
       echo ""
-      tail -n "+$((second_dash + 1))" "$stripped2"
+      tail -n "+$((second_dash + 1))" "$stripped3"
     } | cat -s > "$skill_md"
 
-    rm -f "$stripped1" "$stripped2"
+    rm -f "$stripped1" "$stripped2" "$stripped3"
 
     if [ "$have_clar" = "true" ]; then
       if [ "$had_clar" = "true" ]; then clar_refreshed=$((clar_refreshed + 1)); else clar_injected=$((clar_injected + 1)); fi
     fi
     if [ "$have_si" = "true" ]; then
       if [ "$had_si" = "true" ]; then si_refreshed=$((si_refreshed + 1)); else si_injected=$((si_injected + 1)); fi
+    fi
+    if [ "$want_sm" = "true" ]; then
+      if [ "$had_sm" = "true" ]; then sm_refreshed=$((sm_refreshed + 1)); else sm_injected=$((sm_injected + 1)); fi
+    elif [ "$had_sm" = "true" ]; then
+      sm_removed=$((sm_removed + 1))
     fi
   done
 
@@ -166,6 +199,11 @@ inject_protocol_pointers() {
     local si_summary="  ✓ Self-improvement protocol — injected into $si_injected skill(s), refreshed in $si_refreshed"
     [ "$skipped" -gt 0 ] && si_summary="$si_summary, skipped $skipped (no frontmatter)"
     echo "$si_summary"
+  fi
+  if [ "$have_sm" = "true" ]; then
+    local sm_summary="  ✓ Session-memory protocol — opted in: $sm_opted_in skill(s) (injected $sm_injected new, refreshed $sm_refreshed)"
+    [ "$sm_removed" -gt 0 ] && sm_summary="$sm_summary, removed from $sm_removed (opted out since last run)"
+    echo "$sm_summary"
   fi
   if [ "${#legacy_footer_skills[@]}" -gt 0 ]; then
     echo "  ℹ️  ${#legacy_footer_skills[@]} skill(s) still have the old bottom-of-file '## Self-improvement' section, now redundant with the injected pointer above: $(IFS=,; echo "${legacy_footer_skills[*]}")"

@@ -30,6 +30,41 @@ Do not wait for permission to create this file — the standing rules demand it.
 
 ---
 
+## Rule 0b — Offer to gitignore local tooling artifacts
+
+Immediately after Rule 0, before Rule 1: check whether this project's
+`.gitignore` already lists `graphify-out/`:
+
+```bash
+test -f .gitignore && grep -q "graphify-out" .gitignore && echo "ALREADY_IGNORED" || echo "NOT_IGNORED"
+```
+
+**If it prints `NOT_IGNORED`:** ask once, as a single closed question: "This
+project doesn't gitignore `graphify-out/` yet (the local knowledge graph and
+its build artifacts) — want me to add it?" Add the entry only after an
+explicit yes. If `.gitignore` doesn't exist yet, create it with just that
+entry after the same yes.
+
+**If it prints `ALREADY_IGNORED`:** proceed to Rule 1, say nothing.
+
+**If the answer is no:** proceed to Rule 1. Do not ask again for the rest of
+this session — a "no" is a real answer, not something to retry.
+
+### Anti-patterns — explicitly forbidden for Rule 0b
+
+- Adding the `.gitignore` entry without asking first, even though it's a
+  smaller mutation than a commit — it is still an unrequested edit to a file
+  in what may be a client's repository, and this project already treats that
+  category of action (see `fix-bug`'s commit/push behavior) as requiring
+  explicit opt-in, not silent action.
+- Asking again in the same session after a "no." One answer covers the whole
+  session.
+- Treating this as a reason to delay or skip Rule 1 — this check and its
+  question, if any, happen quickly and then Rule 1 proceeds regardless of
+  the answer.
+
+---
+
 ## Rule 1 — Prepare the project's knowledge graph before investigating any other way
 
 Before doing anything else in response to a request that isn't already fully concrete — before grepping, before globbing, before spawning a task/subagent to explore, before asking the user anything — run this exact command first:

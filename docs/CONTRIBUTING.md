@@ -9,12 +9,14 @@ Adding a new skill from scratch is drag-and-drop. The only rule: every
 skill folder must contain a `SKILL.md` at its root. Everything else is
 optional.
 
+> Looking for what changed recently, or why something behaves the way it does? See [`HISTORY.md`](./HISTORY.md). Building something that dispatches to several sub-skills rather than one self-contained workflow? See [`03-MANAGING-SKILLS.md`](./03-MANAGING-SKILLS.md)'s "Writing a master/dispatcher skill" section instead of this page — `coding-standards` is the worked example.
+
 ## The convention
 
 ```
 your-skill-name/           ← kebab-case folder name
 ├── SKILL.md               ← required. the agent reads this.
-├── README.md              ← required. humans read this.
+├── README.md              ← recommended, not required. humans read this.
 ├── scripts/               ← optional. TypeScript helpers.
 │   └── main.ts
 ├── assets/                ← optional. templates, scaffolds.
@@ -52,9 +54,20 @@ real flags.
 See [`fix-bug/SKILL.md`](./fix-bug/SKILL.md) and
 [`sync-prs/SKILL.md`](./sync-prs/SKILL.md) as reference examples.
 
+**Does one of your steps only gather information, and would it be wasteful to
+re-run if it already ran earlier in the same conversation?** You may be able
+to opt that step into session-memory rather than have it re-run every time —
+see [`03-MANAGING-SKILLS.md`](./03-MANAGING-SKILLS.md)'s "Opting into
+session-memory" section. Most skills don't need this; it's specifically for
+read-only steps that plausibly repeat within one session and whose answer
+can't be invalidated by anything else done in that same session. A knowledge
+graph check is the canonical thing that does *not* qualify.
+
 ## Step 3 — Write README.md
 
-The README is for humans. Cover:
+Not strictly required (`validate_skill.py` warns, doesn't reject, if it's
+missing), but every skill in this repo should still have one — it's the
+first thing a human browsing the repo actually reads. Cover:
 
 - What the skill does (2–3 sentences)
 - Who it's for
@@ -115,6 +128,21 @@ rather than silently leaving two different versions of the same
 instruction in the same file. It's harmless to leave, but worth removing
 by hand once you've confirmed it doesn't say anything the injected
 pointer doesn't already cover.
+
+## Session-memory (opt-in, not automatic — different from the above)
+
+Unlike self-improvement, this one is **not** injected into every skill by
+default — most skills don't need it. It's for the specific, narrower case of
+a step that only gathers information, plausibly gets reached more than once
+in one session, and whose answer can't be invalidated by anything else done
+in that same session (see the note in Step 2 above). If none of your steps
+fit that description, there's nothing to do here.
+
+If one does: add `session-memory: true` to your frontmatter and mark the
+specific step with `**Session-reusable:**`. Full mechanism in
+[`SESSION-MEMORY-PROTOCOL.md`](../config/SESSION-MEMORY-PROTOCOL.md), full
+authoring guidance in
+[`03-MANAGING-SKILLS.md`](./03-MANAGING-SKILLS.md#opting-into-session-memory).
 
 ## Installing an existing skillset
 
