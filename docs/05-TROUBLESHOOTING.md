@@ -2,6 +2,8 @@
 
 Every issue here has been observed in real usage. The entries are ordered from most to least common.
 
+> Looking for what changed recently, or why something behaves the way it does? See [`HISTORY.md`](./HISTORY.md).
+
 ---
 
 ## Setup issues
@@ -65,6 +67,25 @@ description: >
 ```
 
 Then re-run `bash setup.sh`.
+
+---
+
+### `validate_skill.py` warns about session-memory being inconsistent
+
+**Symptom:** Running the validator against a skill prints one of:
+```
+'session-memory: true' is set, but no step in this skill's body is marked
+'Session-reusable:' -- the flag alone does nothing.
+```
+or
+```
+Found a 'Session-reusable:' marker in the body, but 'session-memory: true'
+isn't set in frontmatter -- setup.sh won't inject the protocol pointer.
+```
+
+**Root cause:** The two-part opt-in (frontmatter flag + body marker, see `03-MANAGING-SKILLS.md`) is half-done — one half was added without the other.
+
+**Fix:** Add whichever half is missing. If you set the flag intending to mark a step later, either mark it now or remove the flag until you do — a flag with no marked step does nothing but add noise to every session in that skill.
 
 ---
 
@@ -204,6 +225,65 @@ or:
 ```
 Follow the fix-bug skill for this: [description of bug]
 ```
+
+---
+
+### `coding-standards` applies the wrong domain's standards, or none at all
+
+**Symptom:** Code gets written that clearly should have followed, say, database conventions, but no `coding-standards-database` behavior is visible — or the reverse, a domain's standards get applied to a project that doesn't actually have that layer.
+
+**Root cause options:**
+1. The task's wording didn't clearly imply the domain, and the project's knowledge graph had nothing relevant to return either (most likely for a brand-new feature with no existing code to find) — see `HISTORY.md`'s round-2 entry for why this specific case is a known, not-yet-fully-closed limitation.
+2. `coding-standards/references/manifest.json`'s `project_signals` or `path_patterns` for that domain don't match this project's actual conventions (e.g. a non-standard file location for a schema file).
+3. The dispatcher applied a domain that isn't actually present — this should trigger a clarifying question per its own instructions (see `02-USAGE.md`), not silently apply. If it silently applied instead of asking, that's a protocol violation.
+
+**What to do:** Be explicit about the domain in your request if you know it applies — "this touches the database too" is enough to unstick a wording-only miss. For the manifest mismatch case, check `project_signals`/`path_patterns` for that domain against your actual project layout and consider whether they need broadening (see `03-MANAGING-SKILLS.md`'s "Writing a master/dispatcher skill" section).
+
+**Diagnosis:**
+```bash
+python3 -c "
+import json
+m = json.load(open('coding-standards/references/manifest.json'))
+for d in m['domains']:
+    print(d['domain'], '->', d['project_signals'])
+"
+```
+
+---
+
+### Agent claims to be reusing a session-memory finding that's actually stale, or never reuses when it plausibly could
+
+**Symptom:** Either the agent says "already confirmed earlier..." for something that's since changed, or it re-runs a check every single time within one long session despite nothing changing.
+
+**Root cause (stale reuse):** A genuine protocol miss — the agent should be checking "has anything since then plausibly changed this" before reusing, every time, per `SESSION-MEMORY-PROTOCOL.md`. If it reused something that turned out wrong, that check didn't happen correctly.
+
+**Root cause (never reuses):** Either the step genuinely isn't marked `**Session-reusable:**` (only specific steps in `coding-standards` and `sync-prs` currently are — see `06-REFERENCE.md` for the full list), or the skill's frontmatter is missing `session-memory: true` entirely, in which case the pointer was never injected and the agent has no reason to know reuse is an option here.
+
+**What to do:**
+```bash
+# Confirm the skill actually opted in and the step is actually marked
+grep "session-memory: true" coding-standards/SKILL.md
+grep -c "Session-reusable:" coding-standards/SKILL.md
+```
+If both are present and reuse still isn't happening (or is happening incorrectly), that's worth a direct correction in the moment: "Re-check that instead of reusing the earlier result — I'm not confident it still holds" always works, since the protocol explicitly allows and expects re-checking when uncertain.
+
+**Prevention:** This is a genuinely new mechanism (see `HISTORY.md`) — expect it to need a few real sessions to observe before trusting it heavily.
+
+---
+
+### Agent commits or pushes without asking
+
+**Symptom:** A commit or PR shows up from `fix-bug` that you never explicitly asked for.
+
+**Root cause:** A protocol violation. `fix-bug` defaults to stopping at the edited file — it should only commit, push, or open a PR after you've explicitly opted in via the Step 1 clarification question (see `HISTORY.md`'s "ask before committing" entry and `02-USAGE.md`).
+
+**What to do:**
+```bash
+git log --oneline -3
+```
+If there's a commit you didn't authorize, revert it and, if a PR was opened, close it. Treat this the same as any other unrequested-action protocol violation.
+
+**Prevention:** Avoid phrases like "just fix it" without stating your commit preference either way — if you know up front you want it committed and pushed, say so explicitly ("...and open a PR when done") to skip being asked; if you're not sure, let it ask and answer explicitly rather than assuming a default.
 
 ---
 

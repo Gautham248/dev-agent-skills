@@ -24,7 +24,7 @@ except ImportError:
     yaml = None
 
 ALLOWED_FRONTMATTER_KEYS = {
-    "name", "description", "license", "compatibility", "allowed-tools", "metadata"
+    "name", "description", "license", "compatibility", "allowed-tools", "session-memory", "metadata"
 }
 
 # Known dev-agent-skills roster, kept here so a fresh clone still gets a useful
@@ -74,13 +74,16 @@ def validate(skill_path: Path, roster: set[str]):
             f"under references/.",
         )
 
-    # --- No README.md inside the skill folder ---
-    if (skill_path / "README.md").exists():
-        fail(
-            errors,
-            "README.md found inside the skill folder. All instructions belong in SKILL.md "
-            "or references/ — a repo-level README for human visitors is a separate concern "
-            "and doesn't belong inside the skill's own folder.",
+    # --- README.md inside the skill folder ---
+    # Downgraded from error to warning: CONTRIBUTING.md's own Step 3 instructs every
+    # contributor to write one ("The README is for humans"), and the majority of
+    # existing skills in this repo have one. This is now a nudge for skills that are
+    # missing one, not a rejection of the ones that have it.
+    if not (skill_path / "README.md").exists():
+        warn(
+            warnings,
+            "No README.md found in this skill folder. CONTRIBUTING.md's Step 3 asks every "
+            "skill to have one for human visitors — consider adding one.",
         )
 
     content = skill_md.read_text(encoding="utf-8")
@@ -112,6 +115,23 @@ def validate(skill_path: Path, roster: set[str]):
     if unexpected:
         fail(errors, f"Unexpected frontmatter key(s): {', '.join(sorted(unexpected))}. "
                       f"Allowed: {', '.join(sorted(ALLOWED_FRONTMATTER_KEYS))}")
+
+    # --- session-memory ---
+    if "session-memory" in frontmatter:
+        sm_value = frontmatter["session-memory"]
+        if not isinstance(sm_value, bool):
+            fail(errors, f"'session-memory' must be a boolean (true/false), got {sm_value!r}.")
+        elif sm_value is True:
+            has_marker = bool(re.search(r"Session-reusable:", body))
+            if not has_marker:
+                warn(warnings, "'session-memory: true' is set, but no step in this skill's body is marked "
+                                "'Session-reusable:' -- the flag alone does nothing. Either mark at least one "
+                                "qualifying step, or remove the flag.")
+    else:
+        if re.search(r"Session-reusable:", body):
+            warn(warnings, "Found a 'Session-reusable:' marker in the body, but 'session-memory: true' isn't "
+                            "set in frontmatter -- setup.sh won't inject the protocol pointer, so this marker "
+                            "won't mean anything to an agent reading it. Add 'session-memory: true'.")
 
     # --- name ---
     name = str(frontmatter.get("name", "")).strip()
@@ -156,12 +176,22 @@ def validate(skill_path: Path, roster: set[str]):
         elif len(compatibility) > 500:
             fail(errors, f"'compatibility' is {len(compatibility)} characters; maximum is 500.")
 
-    # --- overall angle-bracket scan of frontmatter block (belt and suspenders) ---
-    if match and ("<" in match.group(1) or ">" in match.group(1)):
-        # Only warn here since the description-specific check above is authoritative;
-        # this catches angle brackets in other fields like metadata values.
-        warn(warnings, "Angle brackets found somewhere in the frontmatter block — verify none are in "
-                        "user-facing fields like description or metadata values.")
+    # --- angle-bracket scan of frontmatter VALUES (belt and suspenders) ---
+    # Fixed: this used to scan the raw pre-YAML text of the whole frontmatter block,
+    # which false-positives on legitimate YAML syntax -- most commonly the '>' block-
+    # scalar folding indicator in 'description: >', which is how most skills in this
+    # repo write a multi-line description. Scanning the *parsed* values instead (skipping
+    # 'description', already checked above) keeps the original intent -- catching angle
+    # brackets in other fields like 'metadata' -- without flagging YAML syntax itself.
+    other_values = [
+        str(v) for k, v in frontmatter.items()
+        if k != "description" and isinstance(v, (str, int, float))
+    ]
+    offending = [v for v in other_values if "<" in v or ">" in v]
+    if offending:
+        warn(warnings, "Angle brackets found in a non-description frontmatter field "
+                        f"(e.g. {offending[0]!r}) — verify it's not user-facing or "
+                        "mistakable for injected instructions.")
 
     # --- size guidance ---
     line_count = content.count("\n") + 1

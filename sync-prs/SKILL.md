@@ -7,6 +7,7 @@ description: >
   on my PRs". Merges each PR's base branch when GitHub flags it conflicting,
   triages CI failures (auto-fixing safe lint/format issues), and surfaces
   unresolved review threads — each PR worked in an isolated git worktree.
+session-memory: true
 ---
 
 <!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->
@@ -19,6 +20,12 @@ While using this skill, and especially when you finish, read and follow the self
 ../config/SELF-IMPROVEMENT-PROTOCOL.md
 (Append real edge cases to this skill's own references/edge-cases.md — create it if missing. See the protocol file for what qualifies.)
 <!-- END dev-agent-skills self-improvement protocol -->
+
+<!-- BEGIN dev-agent-skills session-memory protocol (managed by setup.sh -- do not edit this block manually; edit SESSION-MEMORY-PROTOCOL.md instead) -->
+This skill opted in to session-memory (session-memory: true). Whenever you reach a step
+marked 'Session-reusable:' below, read and follow the session-memory protocol at:
+../config/SESSION-MEMORY-PROTOCOL.md
+<!-- END dev-agent-skills session-memory protocol -->
 
 # Sync PRs
 
@@ -78,6 +85,11 @@ don't fail worktree creation in directories without installed dependencies —
 harmless if you don't use Husky.
 
 ## Step 1 — Identify the running user
+
+**Session-reusable:** if you've already identified the running user earlier
+in this conversation (this skill or otherwise), state that and reuse it —
+the authenticated `gh` identity essentially never changes mid-session. See
+`SESSION-MEMORY-PROTOCOL.md`.
 
 ```bash
 ME=$(gh api user --jq .login)

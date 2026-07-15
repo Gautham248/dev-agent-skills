@@ -2,6 +2,8 @@
 
 This guide gets `dev-agent-skills` installed on your machine, wired into your AI tools, and verified as working. Read the whole thing before running anything — the verification section at the end is what tells you whether each step actually worked, not just that it ran without erroring.
 
+> Looking for what changed recently, or why something behaves the way it does? See [`HISTORY.md`](./HISTORY.md).
+
 ---
 
 ## Prerequisites
@@ -47,68 +49,101 @@ Replace the path with wherever you actually want it. The examples in this doc us
 bash setup.sh
 ```
 
-This is the only command you need. It does everything: injects the governance protocols into every skill, configures OpenCode globally, regenerates the README table, and symlinks the skills into every detected harness.
+This is the only command you need. It does everything: injects the governance protocols into every skill (the session-memory protocol only into skills that opt into it), configures OpenCode globally, regenerates the README table, and symlinks the skills into every detected harness.
 
-**What you should see** (exact output, with your actual path):
+**What you should see** (real output, with your actual path):
 
 ```
 dev-agent-skills setup
 Skills directory: /home/<you>/10xMinds/AI-Dev-Agent/dev-agent-skills
 
-Found 10 skills: eslint-rule-author first-principles-review fix-bug graphify plan-feature skill-add skill-update sync-prs typescript-conventions webapp-conventions
+Found 19 skills: coding-standards-backend coding-standards-database coding-standards-e2e coding-standards-frontend coding-standards-project-organization coding-standards-tanstack-query coding-standards eslint-rule-author first-principles-review fix-bug graphify investigate-issue plan-feature skill-add skill-factory skill-update sync-prs typescript-conventions webapp-conventions
 
-  ✓ Clarification protocol — injected into 10 skill(s), refreshed in 0
-  ✓ Self-improvement protocol — injected into 10 skill(s), refreshed in 0
+  ✓ Clarification protocol — injected into 0 skill(s), refreshed in 19
+  ✓ Self-improvement protocol — injected into 0 skill(s), refreshed in 19
+  ✓ Session-memory protocol — opted in: 2 skill(s) (injected 0 new, refreshed 2)
   ℹ️  1 skill(s) still have the old bottom-of-file '## Self-improvement' section, now redundant with the injected pointer above: fix-bug
       Harmless to leave (the injected pointer applies regardless)...
 
   ✓ OpenCode global config — /home/<you>/.config/opencode/opencode.json (permission.skill=allow; ...)
-  ✓ README.md skills table — regenerated (10 skills)
+  ✓ README.md skills table — already up to date (19 skills)
 
-  ✓ Claude Code — /home/<you>/.claude/skills (7 new links)
-  ✓ OpenCode — /home/<you>/.config/opencode/skills (7 new links)
+  ✓ Claude Code — /home/<you>/.claude/skills (19 new links)
+  ✓ OpenCode — /home/<you>/.config/opencode/skills (19 new links)
   ✓ Hermes — added external_dirs to /home/<you>/.hermes/config.yaml
 
 Done. To pick up new skills (and refresh the clarification protocol) after a git pull, run: bash setup.sh
 ```
 
+**Why "refreshed," not "injected new," even on a first run:** the managed protocol blocks are committed to git, not generated only locally — whoever last touched a skill already ran `setup.sh` and committed the result. You'll only see "injected N new" for a skill that's genuinely never had a given protocol block before (a brand-new skill someone just added, or a protocol someone just opted a skill into for the first time).
+
+**Three protocols now, not two:** clarification and self-improvement are injected into every skill unconditionally, always. Session-memory is different — it's opt-in per skill (`session-memory: true` in that skill's frontmatter), so the count next to it reflects how many skills currently opt in, not the full skill count. Currently: `coding-standards` and `sync-prs`. See [`06-REFERENCE.md`](./06-REFERENCE.md) for what session-memory actually does, and [`03-MANAGING-SKILLS.md`](./03-MANAGING-SKILLS.md) for how to opt a new skill into it.
+
 The specific harness lines you see depend on what's installed. Missing a harness line entirely means that harness isn't installed on this machine — that's fine.
 
-**Run setup.sh again on second run:**
+**Run setup.sh again on a second run, nothing changed:**
 ```
-  ✓ Clarification protocol — injected into 0 skill(s), refreshed in 10
-  ✓ Self-improvement protocol — injected into 0 skill(s), refreshed in 10
+  ✓ Clarification protocol — injected into 0 skill(s), refreshed in 19
+  ✓ Self-improvement protocol — injected into 0 skill(s), refreshed in 19
+  ✓ Session-memory protocol — opted in: 2 skill(s) (injected 0 new, refreshed 2)
   ✓ Claude Code — /home/<you>/.claude/skills (0 new links)
 ```
-"Refreshed in 10, 0 new links" — this is correct. The script is idempotent.
+"0 new, all refreshed" — this is correct. The script is idempotent.
+
+**Run setup.sh after removing `session-memory: true` from a skill's frontmatter:**
+```
+  ✓ Session-memory protocol — opted in: 1 skill(s) (injected 0 new, refreshed 1), removed from 1 (opted out since last run)
+```
+The pointer is actually removed from that skill's `SKILL.md` on this run — opting out takes effect immediately, same idempotent strip-and-rebuild logic as opting in.
 
 ---
 
 ## Step 3 — Verify the injection
 
-Confirm the protocols actually landed inside the skills, not just that the script ran:
+Confirm the protocols actually landed inside the skills, not just that the script ran. This loop discovers skills automatically rather than naming them, so it stays correct as skills are added or removed — no need to edit this command later:
 
 ```bash
-for skill in eslint-rule-author first-principles-review fix-bug graphify plan-feature skill-add skill-update sync-prs typescript-conventions webapp-conventions; do
+for dir in */; do
+  skill="${dir%/}"
+  [ -f "${dir}SKILL.md" ] || continue
   echo "=== $skill ==="
-  grep -c "BEGIN dev-agent-skills clarification protocol" "$skill/SKILL.md" && echo "  clarification: OK" || echo "  clarification: MISSING"
-  grep -c "BEGIN dev-agent-skills self-improvement protocol" "$skill/SKILL.md" && echo "  self-improvement: OK" || echo "  self-improvement: MISSING"
+  grep -c "BEGIN dev-agent-skills clarification protocol" "${dir}SKILL.md" > /dev/null \
+    && echo "  clarification: OK" || echo "  clarification: MISSING"
+  grep -c "BEGIN dev-agent-skills self-improvement protocol" "${dir}SKILL.md" > /dev/null \
+    && echo "  self-improvement: OK" || echo "  self-improvement: MISSING"
+  if grep -q "session-memory: true" "${dir}SKILL.md"; then
+    grep -c "BEGIN dev-agent-skills session-memory protocol" "${dir}SKILL.md" > /dev/null \
+      && echo "  session-memory: OK (opted in)" || echo "  session-memory: MISSING (opted in but not injected — re-run setup.sh)"
+  fi
 done
 ```
 
-Every skill should print `1` and `OK` for both. Any `MISSING` means the injection failed — check that `CLARIFICATION-PROTOCOL.md` and `SELF-IMPROVEMENT-PROTOCOL.md` exist in `config/` at the repo root.
+Every skill should print `OK` for clarification and self-improvement. Only `coding-standards` and `sync-prs` (currently) should print a session-memory line at all — that's expected, not a gap, since it's opt-in.
 
-Check the ordering is correct (clarification always before self-improvement):
+Check the ordering is correct (clarification, then self-improvement, then session-memory if present):
 
 ```bash
-for skill in eslint-rule-author first-principles-review fix-bug graphify plan-feature skill-add skill-update sync-prs typescript-conventions webapp-conventions; do
-  clar=$(grep -n "BEGIN dev-agent-skills clarification" "$skill/SKILL.md" | cut -d: -f1)
-  si=$(grep -n "BEGIN dev-agent-skills self-improvement" "$skill/SKILL.md" | cut -d: -f1)
-  [ "$clar" -lt "$si" ] && echo "$skill: ORDER OK" || echo "$skill: ORDER WRONG"
+for dir in */; do
+  [ -f "${dir}SKILL.md" ] || continue
+  clar=$(grep -n "BEGIN dev-agent-skills clarification" "${dir}SKILL.md" | cut -d: -f1)
+  si=$(grep -n "BEGIN dev-agent-skills self-improvement" "${dir}SKILL.md" | cut -d: -f1)
+  sm=$(grep -n "BEGIN dev-agent-skills session-memory" "${dir}SKILL.md" | cut -d: -f1)
+  order_ok="true"
+  [ -n "$clar" ] && [ -n "$si" ] && [ "$clar" -ge "$si" ] && order_ok="false"
+  [ -n "$sm" ] && [ -n "$si" ] && [ "$si" -ge "$sm" ] && order_ok="false"
+  [ "$order_ok" = "true" ] && echo "${dir%/}: ORDER OK" || echo "${dir%/}: ORDER WRONG"
 done
 ```
 
-All ten should print `ORDER OK`.
+All 19 should print `ORDER OK`.
+
+Or, more thoroughly, run the repo's own validator against a skill directly, which checks this and considerably more (frontmatter correctness, description quality signals, line-count guidelines, and — for any skill with `session-memory: true` — that the flag and the `Session-reusable:` marker are actually consistent with each other):
+
+```bash
+python3 skill-factory/scripts/validate_skill.py coding-standards
+```
+
+`No errors found.` is what you want. See [`06-REFERENCE.md`](./06-REFERENCE.md) for the full list of what this checks.
 
 ---
 
@@ -170,6 +205,8 @@ hermes skills list | grep fix-bug
 
 If `fix-bug` appears, Hermes is correctly loading from the skills repo.
 
+**Note on the newer skills:** `coding-standards` is a dispatcher — see [`06-REFERENCE.md`](./06-REFERENCE.md) for what that means. Because Hermes doesn't auto-select skills by description the way OpenCode does, always name the skill explicitly in a Hermes prompt, same as any other skill in this repo (see [`02-USAGE.md`](./02-USAGE.md)).
+
 ---
 
 ## Step 6 — Verify Claude Code wiring (if you use Claude Code)
@@ -200,7 +237,7 @@ git pull
 bash setup.sh
 ```
 
-`git pull` gets the new content. `setup.sh` injects the protocols into any new skills, refreshes the injection in existing ones, and symlinks the new skills into your harnesses. You do not need to do anything else — the new skill is immediately available in your IDE after this.
+`git pull` gets the new content. `setup.sh` injects the protocols into any new skills, refreshes the injection in existing ones (adding or removing the session-memory pointer per skill as needed), and symlinks the new skills into your harnesses. You do not need to do anything else — the new skill is immediately available in your IDE after this.
 
 ---
 

@@ -14,6 +14,7 @@ description: >
   conventions belong to typescript-conventions and webapp-conventions -- this
   skill owns only company-specific rules, and on any conflict the company
   rule wins.
+session-memory: true
 ---
 
 <!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->
@@ -26,6 +27,12 @@ While using this skill, and especially when you finish, read and follow the self
 ../config/SELF-IMPROVEMENT-PROTOCOL.md
 (Append real edge cases to this skill's own references/edge-cases.md — create it if missing. See the protocol file for what qualifies.)
 <!-- END dev-agent-skills self-improvement protocol -->
+
+<!-- BEGIN dev-agent-skills session-memory protocol (managed by setup.sh -- do not edit this block manually; edit SESSION-MEMORY-PROTOCOL.md instead) -->
+This skill opted in to session-memory (session-memory: true). Whenever you reach a step
+marked 'Session-reusable:' below, read and follow the session-memory protocol at:
+../config/SESSION-MEMORY-PROTOCOL.md
+<!-- END dev-agent-skills session-memory protocol -->
 
 # Coding Standards (dispatcher)
 
@@ -72,18 +79,34 @@ of domain. Keep them in mind for the rest of this task.
 
 ## Step 2 -- Detect which domains this project actually has
 
-Run these checks now (all cheap -- file reads and greps, not a graph build;
-there is nothing here worth caching between sessions, just redo it every
-time). Read `references/manifest.json` for the authoritative, current list of
-domains and their `project_signals` -- do not hardcode the list here, the
-manifest is the source of truth and may have grown since this was written.
+**Session-reusable:** if you've already run this exact detection earlier in
+this conversation, and nothing since then would plausibly change it (no new
+dependency installed, no schema file added/removed), state that explicitly
+and reuse the earlier result instead of re-running the checks below — see
+`SESSION-MEMORY-PROTOCOL.md`. This is about *within* one session only; there
+is still nothing here worth persisting *across* sessions via a cache file.
 
-For each domain in the manifest, check its `project_signals` against the
-current project:
+**Primary path: read `graphify-out/.graphify_stack.json`.** Rule 1 guarantees
+a current graph exists before any skill investigates further, and `graphify`
+records this file as part of that same build (see `graphify/SKILL.md` Step
+2.6) -- reading it here means this step and the graph's own freshness share
+one mechanism instead of running a second, independent detection pass. Read
+`references/manifest.json` for the authoritative, current list of domains --
+do not hardcode the list here, the manifest may have grown since this was
+written. For each domain:
+
+- A domain is **present** if any of its `dependency_patterns` appears in
+  `.graphify_stack.json`'s `dependencies` list, or any of its `path_patterns`
+  appears (as a substring) in `notable_files` or `notable_dirs`.
+
+**Fallback path, only if `.graphify_stack.json` doesn't exist** (shouldn't
+happen given Rule 1, but don't fail silently if it does -- and don't treat
+this as routine, it's worth a one-line note that the fallback was needed):
+fall back to direct detection using each domain's `project_signals`:
 
 ```bash
-# Example shape -- adapt the greps to what manifest.json actually lists,
-# don't hardcode this exact command set if the manifest has changed:
+# Fallback only -- adapt the greps to what manifest.json's project_signals
+# actually lists, don't hardcode this exact command set if it has changed:
 test -f package.json && cat package.json
 find . -maxdepth 3 -iname "schema.zmodel" -o -iname "schema.prisma" -o -iname "playwright.config.*" 2>/dev/null
 find . -maxdepth 3 -type d \( -iname "components" -o -iname "migrations" -o -iname "e2e" \) 2>/dev/null
@@ -93,21 +116,55 @@ A domain is **present** if at least one of its `project_signals` is found.
 Note the result as a short internal list (present / absent per domain) --
 this is scratch reasoning for this session, not a file to write anywhere.
 
-## Step 3 -- Match the task against domains
+## Step 3 -- Match the task against domains, grounded in the actual graph
 
-Compare the request against each present domain's `task_signals` in the
-manifest. A domain is a **candidate** if the task's content plausibly matches
-its `task_signals` -- match on meaning, not literal keywords (e.g. "server
-data" or "refetch when the window regains focus" matches the TanStack Query
-domain's signals just as much as the literal product name would).
+By the time this skill runs, Rule 1 has already ensured a current knowledge
+graph exists for this project -- use it rather than guessing from the task's
+wording alone. Matching purely on phrasing misses domains a task implies
+without naming (e.g. "add an endpoint for user preferences" reads as backend
+only, even on a project with a database, because the words "migration" or
+"schema" never appear).
 
-**A domain that's a task-signal match but not present in the project is a
-red flag, not an automatic dispatch** -- e.g. the request mentions "add a
-query hook" but no `@tanstack/*-query` dependency exists anywhere. Don't
-silently apply a standard for a library the project doesn't use. Surface it:
-"This project doesn't appear to have TanStack Query installed -- should I add
-it, or is there a different data-fetching approach already in use here?" is a
-single closed-enough question that resolves it.
+**3a. Query the graph for what this task actually touches:**
+
+```bash
+graphify query "<a question grounded in what's actually being asked, same
+as Rule 1's own phrasing -- e.g. 'files and functions relevant to adding an
+endpoint for user preferences'>"
+```
+
+**3b. Classify what comes back.** For each file/function the query returns,
+check its path against each present domain's `path_patterns` in the manifest
+(e.g. a result under `src/routes/api/` -> backend; a result touching
+`schema.prisma` or a Drizzle/Prisma query call -> database). This turns
+"does this task touch the database" into a concrete, checkable fact instead
+of a guess from task wording -- it's what closes the "add an endpoint for
+user preferences never flags database" gap: the graph query surfaces the
+actual persistence call or schema reference if one exists, whether or not
+the task said "migration."
+
+**3c. Fall back to task_signals wording only if the graph query returns
+nothing usable** (empty project, brand-new feature with no existing code to
+find, or `graphify` itself reports it can't proceed per Rule 1's own
+fallback) -- match on meaning against `task_signals`, same as before.
+
+**A domain that's evidence-backed (by 3a/3b or 3c) but not present in the
+project is a red flag, not an automatic dispatch** -- e.g. graph evidence or
+task wording points at TanStack Query but no `@tanstack/*-query` dependency
+exists. Don't silently apply a standard for a library the project doesn't
+use. Surface it: "This project doesn't appear to have TanStack Query
+installed -- should I add it, or is there a different data-fetching approach
+already in use here?"
+
+**A domain match that structurally depends on another domain that's absent
+is a deeper mismatch, not just a missing-library flag** -- check each
+matched domain's `depends_on` in the manifest. If `tanstack-query` matches
+but `frontend` isn't present at all (no UI framework anywhere in the
+project, not just the query library missing), say so specifically: "This
+project has no frontend framework at all, so there's no client to attach a
+TanStack Query client to -- is this meant to add a frontend first, or did
+you mean something else?" -- more useful than a generic "library not
+installed" question because it names the actual structural gap.
 
 ## Step 4 -- Decide and dispatch
 
@@ -124,10 +181,18 @@ single closed-enough question that resolves it.
   delegating to `plan-feature`: supply what's already known, don't make the
   dispatched skill re-investigate from scratch).
 - **Genuinely ambiguous which of two+ present, candidate domains applies:**
-  ask exactly one closed question naming the real candidates you found --
-  never a generic "which areas does this touch?" Example: "This touches both
-  the endpoint and the query layer -- want both `coding-standards-backend`
-  and `coding-standards-tanstack-query` standards applied, or just one?"
+  ask exactly one closed question grounded in what the graph query in Step 3
+  actually returned -- never a generic "which areas does this touch?" and
+  never a domain-name-only question if you have real file/function evidence
+  to name instead. Same pattern as `CLARIFICATION-PROTOCOL.md`'s own "I see
+  two places that reference X -- is it the one in `<file>`, or the other
+  one?" -- concrete beats abstract. Example: instead of "want backend or
+  tanstack-query standards, or both?", prefer "the graph shows this touching
+  both `syncUserPreferences()` in `src/routes/api/preferences.ts` and the
+  `usePreferencesQuery` hook in `src/hooks/` -- want both standards applied,
+  or just one?" If the graph query in 3a returned nothing usable and you're
+  genuinely working from task wording alone, the plain domain-name version
+  is the fallback, not the default.
 - **Never** dispatch every present domain "to be safe" when the task clearly
   only touches one. Over-dispatching wastes context and isn't more correct --
   it's a guess with extra steps.

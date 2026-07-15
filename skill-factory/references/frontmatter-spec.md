@@ -51,6 +51,21 @@ Only relevant for open-source distribution. Common values: `MIT`, `Apache-2.0`.
 
 Restricts which tools the skill may invoke, e.g. `Bash(python:*) Bash(npm:*) WebFetch`. Use when a skill should be scoped away from tools it has no legitimate reason to touch.
 
+## `session-memory` — optional
+
+Boolean (`true`/`false`, defaults to unset/false). Opts this skill into the
+session-memory protocol (`config/SESSION-MEMORY-PROTOCOL.md`) — `setup.sh`
+only injects that pointer for skills that set this explicitly. Only set this
+if the skill's own body actually marks at least one step
+**Session-reusable:** — the flag alone does nothing on its own, it just
+authorizes those markers to mean something. The bar for marking a step
+reusable: it must (a) only gather information, never change anything, (b)
+plausibly run more than once within a single session, and (c) have an answer
+that essentially can't be invalidated by anything else done in that same
+session. A knowledge-graph check is the canonical *non*-example — it fails
+(c), since most skills using one exist to change the code that graph
+describes.
+
 ## `metadata` — optional
 
 Free-form key/value block for anything else worth recording:
@@ -65,7 +80,8 @@ metadata:
 
 ## Nothing else is allowed
 
-Any key outside `name`, `description`, `license`, `compatibility`, `allowed-tools`, `metadata` should be treated as a mistake, not a creative extension — the parser only recognizes this set.
+Any key outside `name`, `description`, `license`, `compatibility`, `allowed-tools`, `session-memory`, `metadata` should be treated as a mistake, not a creative extension — the parser only recognizes this set.
+
 
 ## File-level rules that aren't frontmatter but break things just as badly
 
