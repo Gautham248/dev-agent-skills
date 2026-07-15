@@ -156,6 +156,74 @@ Then act on it:
 
 Skip this step entirely if `detect` returned zero `video` files. When the corpus has video or audio, see `references/transcribe.md` to transcribe them to text first, then treat the transcripts as doc files in Step 3.
 
+### Step 2.6 - Stack detection (generic, feeds any domain-aware skill)
+
+Runs unconditionally, every build -- this is separate from and does not modify
+the `detect()` call in Step 2. It records plain, reusable facts about the
+codebase's dependencies and notable files/directories. This step deliberately
+knows nothing about any specific downstream skill (e.g. `coding-standards`)
+-- it just records generic facts once, so any skill that needs "what does
+this project use" can read this instead of re-scanning independently. If a
+future consumer needs a signal not covered by the `notable_*` lists below,
+broaden the lists here rather than having that skill scan independently.
+
+```bash
+$(cat graphify-out/.graphify_python) -c "
+import json, os
+from pathlib import Path
+
+stack = {'dependencies': [], 'notable_files': [], 'notable_dirs': []}
+
+# All package.json dependencies -- complete, not curated, since the full
+# list is cheap and is itself the generic signal (no need to guess which
+# package names might matter to some future consumer).
+pkg_path = Path('package.json')
+if pkg_path.exists():
+    try:
+        pkg = json.loads(pkg_path.read_text(encoding='utf-8'))
+        deps = list(pkg.get('dependencies', {}).keys()) + list(pkg.get('devDependencies', {}).keys())
+        stack['dependencies'] = sorted(set(deps))
+    except Exception:
+        pass
+
+# Notable config files, bounded depth, excluding graphify's own output and
+# common noise directories. This list is intentionally broader than any one
+# consumer's current needs -- extend it here, once, rather than in a
+# consuming skill, if a real gap is found.
+NOTABLE_FILES = {
+    'schema.prisma', 'schema.zmodel', 'playwright.config.ts', 'playwright.config.js',
+    'drizzle.config.ts', 'astro.config.mjs', 'astro.config.ts', 'vite.config.ts',
+    'next.config.js', 'next.config.mjs', 'nuxt.config.ts', 'svelte.config.js',
+}
+NOTABLE_DIRS = {
+    'components', 'migrations', 'e2e', 'tests', 'prisma', 'drizzle', 'typeorm',
+    'models', 'routes', 'api',
+}
+EXCLUDE_DIRS = {'node_modules', '.git', 'graphify-out', 'dist', 'build', '.next'}
+
+for root, dirs, files in os.walk('.'):
+    depth = root.count(os.sep)
+    dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
+    if depth > 3:
+        dirs[:] = []
+        continue
+    rel_root = '' if root == '.' else (root[2:] if root.startswith('./') else root)
+    for f in files:
+        if f in NOTABLE_FILES:
+            stack['notable_files'].append(os.path.join(rel_root, f) if rel_root else f)
+    for d in dirs:
+        if d in NOTABLE_DIRS:
+            stack['notable_dirs'].append((os.path.join(rel_root, d) if rel_root else d) + '/')
+
+Path('graphify-out/.graphify_stack.json').write_text(
+    json.dumps(stack, indent=2, ensure_ascii=False), encoding='utf-8'
+)
+"
+```
+
+Do not print this output. It's read by other skills (e.g. `coding-standards`
+Step 2), not summarized to the user here.
+
 ### Step 3 - Extract entities and relationships
 
 **Before starting:** note whether `--mode deep` was given. You must pass `DEEP_MODE=true` to every subagent in Step B2 if it was. Track this from the original invocation - do not lose it.

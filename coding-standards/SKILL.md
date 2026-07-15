@@ -84,20 +84,29 @@ this conversation, and nothing since then would plausibly change it (no new
 dependency installed, no schema file added/removed), state that explicitly
 and reuse the earlier result instead of re-running the checks below — see
 `SESSION-MEMORY-PROTOCOL.md`. This is about *within* one session only; there
-is still nothing here worth persisting *across* sessions via a cache file —
-each of these checks is a handful of milliseconds, so a brand new session
-just re-runs them fresh once, same as before.
+is still nothing here worth persisting *across* sessions via a cache file.
 
-Read `references/manifest.json` for the authoritative, current list of
-domains and their `project_signals` -- do not hardcode the list here, the
-manifest is the source of truth and may have grown since this was written.
+**Primary path: read `graphify-out/.graphify_stack.json`.** Rule 1 guarantees
+a current graph exists before any skill investigates further, and `graphify`
+records this file as part of that same build (see `graphify/SKILL.md` Step
+2.6) -- reading it here means this step and the graph's own freshness share
+one mechanism instead of running a second, independent detection pass. Read
+`references/manifest.json` for the authoritative, current list of domains --
+do not hardcode the list here, the manifest may have grown since this was
+written. For each domain:
 
-For each domain in the manifest, check its `project_signals` against the
-current project:
+- A domain is **present** if any of its `dependency_patterns` appears in
+  `.graphify_stack.json`'s `dependencies` list, or any of its `path_patterns`
+  appears (as a substring) in `notable_files` or `notable_dirs`.
+
+**Fallback path, only if `.graphify_stack.json` doesn't exist** (shouldn't
+happen given Rule 1, but don't fail silently if it does -- and don't treat
+this as routine, it's worth a one-line note that the fallback was needed):
+fall back to direct detection using each domain's `project_signals`:
 
 ```bash
-# Example shape -- adapt the greps to what manifest.json actually lists,
-# don't hardcode this exact command set if the manifest has changed:
+# Fallback only -- adapt the greps to what manifest.json's project_signals
+# actually lists, don't hardcode this exact command set if it has changed:
 test -f package.json && cat package.json
 find . -maxdepth 3 -iname "schema.zmodel" -o -iname "schema.prisma" -o -iname "playwright.config.*" 2>/dev/null
 find . -maxdepth 3 -type d \( -iname "components" -o -iname "migrations" -o -iname "e2e" \) 2>/dev/null
