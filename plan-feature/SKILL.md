@@ -14,6 +14,7 @@ compatibility: Requires graphify on PATH, an authenticated gh CLI, git, and netw
 metadata:
   version: 2.0.0
   category: workflow-automation
+graph-memory: true
 ---
 
 <!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->
@@ -26,6 +27,12 @@ While using this skill, and especially when you finish, read and follow the self
 ../config/SELF-IMPROVEMENT-PROTOCOL.md
 (Append real edge cases to this skill's own references/edge-cases.md — create it if missing. See the protocol file for what qualifies.)
 <!-- END dev-agent-skills self-improvement protocol -->
+
+<!-- BEGIN dev-agent-skills graph-memory protocol (managed by setup.sh -- do not edit this block manually; edit GRAPH-MEMORY-PROTOCOL.md instead) -->
+This skill opted in to graph-memory (graph-memory: true). At each point marked
+'Graph-memory:' below, read and follow the graph-memory protocol at:
+../config/GRAPH-MEMORY-PROTOCOL.md
+<!-- END dev-agent-skills graph-memory protocol -->
 
 # Plan feature
 
@@ -100,6 +107,10 @@ Run the four context queries from `references/graph-workflow.md` — related
 functionality, data layer, API/routing layer, UI layer — and read the most
 relevant files from each result before writing anything.
 
+**Graph-memory:** before relying on these results, check whether anything
+here is already flagged as a known dead end or a correction — see
+`GRAPH-MEMORY-PROTOCOL.md`.
+
 ## Step 5 — Write the plan, then verify its paths
 
 Fill `assets/plan-template.md`. Every file path the plan names must either
@@ -137,6 +148,10 @@ Dispatch on the output mode — exact commands in
   Graph:  <reused existing / rebuilt>
   Covers: <3-bullet summary of what the plan includes>
 ```
+
+**Graph-memory:** now that the plan is written, record whether the Step 4
+queries were actually useful for it — see `GRAPH-MEMORY-PROTOCOL.md`. Be
+honest about `useful`/`dead_end`/`corrected`.
 
 ## If something goes wrong
 
