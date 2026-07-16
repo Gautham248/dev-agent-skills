@@ -11,15 +11,24 @@ This guide covers how to communicate with the agent when using skills from this 
 When you start a session, the agent is not reading your request in isolation. It is executing a fixed sequence of steps before it does anything else, regardless of what you said. Those steps are:
 
 1. **Create `AGENTS.md`** at the project root if it doesn't exist (copies the full standing rules into the project so every harness that reads `AGENTS.md` gets them too).
-2. **Check for a knowledge graph** (`graphify-out/graph.json`). If present, query it. If absent, build it first using the `graphify` skill.
-3. **Load the matching workflow skill** (`fix-bug`, `plan-feature`, etc.) via the skill-loading tool.
-4. **Clarify before acting** — investigate, ask at most one focused question, present a plan with explicit scope and a hard stop.
-5. **Act only after your explicit confirmation.**
-6. **After finishing, record any real edge cases** the skill didn't cover into that skill's `references/edge-cases.md`.
+2. **Offer to gitignore `graphify-out/`** if this project doesn't already — asked once, explicitly, never done silently and never repeated after a "no." See "What you'll be asked once per project" below.
+3. **Check for a knowledge graph** (`graphify-out/graph.json`). If present, query it. If absent, build it first using the `graphify` skill.
+4. **Load the matching workflow skill** (`fix-bug`, `plan-feature`, etc.) via the skill-loading tool.
+5. **Clarify before acting** — investigate, ask at most one focused question, present a plan with explicit scope and a hard stop.
+6. **Act only after your explicit confirmation.**
+7. **After finishing, record any real edge cases** the skill didn't cover into that skill's `references/edge-cases.md`.
 
 Understanding this sequence tells you what to expect and what is and isn't your job to specify.
 
-**One addition to this sequence for code-writing tasks:** somewhere in step 5, before or while the actual code gets written, `coding-standards` fires — but it isn't a workflow skill like `fix-bug` or `plan-feature`, and step 3 above doesn't cover it. It's a separate kind of skill that applies alongside whichever workflow skill loaded. See "Master/dispatcher skills" below for what that actually looks like.
+**One addition to this sequence for code-writing tasks:** somewhere in step 6, before or while the actual code gets written, `coding-standards` fires — but it isn't a workflow skill like `fix-bug` or `plan-feature`, and step 4 above doesn't cover it. It's a separate kind of skill that applies alongside whichever workflow skill loaded. See "Master/dispatcher skills" below for what that actually looks like.
+
+### What you'll be asked once per project
+
+Step 2 above is a real question, not a formality — expect something like:
+
+> "This project doesn't gitignore `graphify-out/` yet (the local knowledge graph and its build artifacts) — want me to add it?"
+
+Answer however you actually want it handled for this project. A "no" is respected for the rest of the session, not re-asked. `graphify-out/` itself never moves regardless of your answer — this only affects whether it's tracked by git, nothing about where the files live or how any skill reads them.
 
 ---
 
