@@ -83,6 +83,27 @@ Found while testing the dispatcher above, not caused by it — but fixed in the 
 
 ---
 
+## `coding-standards` manifest broadened; `graphify` extended for generic stack detection; local-artifact gitignore offer added
+
+Three related items, finalized and applied together after a review comment surfaced a real gap.
+
+**The trigger:** a reviewer asked whether `coding-standards`' database-domain detection was intentionally limited to Prisma, Drizzle, and ZenStack. It wasn't — TypeORM, Sequelize, Knex, and Mongoose projects were silently undetectable, and the equivalent gap existed on the frontend side (Angular, Astro, Preact missing). Manifest broadened to cover the common cases explicitly, with an added note in the manifest's own `_comment` field stating plainly that these lists can't be exhaustive and should be extended as real gaps are found — same honesty already used for the round-2 "brand-new feature" limitation.
+
+**Before:** `coding-standards` Step 2 (project domain detection) ran its own independent `package.json`/`find` commands every time it needed to know what a project actually contains — a second, separate mechanism from `graphify`'s own full-codebase pass, despite both answering overlapping "what does this project have" questions.
+
+**After:** `graphify` gained a new, unconditional Step 2.6 — generic stack detection, recording `package.json` dependencies (the complete list, not curated) and a bounded set of notable config files/directories to `graphify-out/.graphify_stack.json`. Deliberately generic: `graphify` has no knowledge of `coding-standards` or any other specific consumer, it just records reusable facts once. `coding-standards` Step 2 now reads this file and checks its manifest's new `dependency_patterns` field (npm package name matching, separate from the existing `path_patterns` field which handles file/directory matching) against it, falling back to the original direct-detection commands only if the file is somehow missing.
+
+**Why this way, not a new cache:** the actual payoff is that this detection now inherits `graphify`'s existing staleness-refresh mechanism for free, rather than needing a second one built and maintained separately — the same "one mechanism, not two" principle already applied when the dispatcher was first designed against a persistent-cache instinct that was measured and rejected.
+
+**Also decided in the same round:**
+- **`graphify-out/` gitignore handling** — a new Rule 0b in `AGENT-STANDING-RULES.md` offers, once per project, to add `graphify-out/` to `.gitignore` if it isn't already there — asked explicitly, never done silently, and never re-asked after a "no" in the same session. A full relocation of `graphify-out/` into a `.dev-agent/`-style subfolder was seriously considered (including verifying what it would take to make `graphify` itself work identically from a new location) but rejected once it became clear gitignoring in place fully solves the actual client-visibility concern, at a fraction of the risk — `graphify/SKILL.md` has roughly 70 internal references to its own output location, none of which needed to change once relocation was taken off the table.
+- **`AGENTS.md`** — reconsidered and left unchanged: stays at the project root, stays committed. Gitignoring it was considered for the same client-visibility reason, but `AGENTS.md`'s entire purpose is being a shared, committed file (OpenCode's own documentation says as much), so gitignoring it would work against what it's for. Documented as an easy two-command reversal (`echo "AGENTS.md" >> .gitignore` + `git rm --cached AGENTS.md`) if ever needed later — no tooling change required either way.
+
+**Testing note distinct from every round before this one:** the `graphify` Step 2.6 addition is plain, self-contained Python — no agent instructions to walk through by hand. It was extracted verbatim from the actual file and run for real against five mock projects, including one built specifically to prove the manifest fix (Angular + TypeORM + Sequelize — undetectable under the old manifest, correctly detected under the new one). This caught a real bug before it shipped: a path-prefix inconsistency between root-level and nested directory entries in the stack-detection output, harmless for the substring-matching logic that consumes it but fixed anyway once found.
+
+---
+
 ## Current state snapshot (at time of writing)
 
-19 skills at the repo root: `coding-standards` + its 6 domain sub-skills, `eslint-rule-author`, `first-principles-review`, `fix-bug`, `graphify`, `investigate-issue`, `plan-feature`, `skill-add`, `skill-factory`, `skill-update`, `sync-prs`, `typescript-conventions`, `webapp-conventions`. Three managed protocols (clarification and self-improvement unconditional; session-memory opt-in, currently on 2 skills). `validate_skill.py` fully passes across all 19.
+19 skills at the repo root: `coding-standards` + its 6 domain sub-skills, `eslint-rule-author`, `first-principles-review`, `fix-bug`, `graphify`, `investigate-issue`, `plan-feature`, `skill-add`, `skill-factory`, `skill-update`, `sync-prs`, `typescript-conventions`, `webapp-conventions`. Three managed protocols (clarification and self-improvement unconditional; session-memory opt-in, currently on 2 skills). Six standing rules (0, 0b, 1, 2, 3, and the meta-principle) in `AGENT-STANDING-RULES.md`. `coding-standards`' domain manifest at version 3, its detection fed by `graphify`'s own build rather than a separate pass. `validate_skill.py` fully passes across all 19.
+

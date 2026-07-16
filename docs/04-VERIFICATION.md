@@ -147,6 +147,18 @@ for d in m['domains']:
 done
 ```
 
+```bash
+# graphify's stack-detection output exists and is real JSON -- this is what
+# Step 2 (project detection) reads instead of running independent commands
+test -f graphify-out/.graphify_stack.json && python3 -c "
+import json
+s = json.load(open('graphify-out/.graphify_stack.json'))
+print('dependencies:', len(s['dependencies']))
+print('notable_files:', s['notable_files'])
+print('notable_dirs:', s['notable_dirs'])
+" || echo "MISSING -- Step 2 will fall back to direct detection commands instead"
+```
+
 ---
 
 ## Post-import verification checklist

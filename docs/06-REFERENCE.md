@@ -191,7 +191,8 @@ Only relevant if you're writing or maintaining a master/dispatcher skill (see [`
 
 ```json
 {
-  "version": 2,
+  "_comment": "... states explicitly that these lists cover common cases, not an exhaustive set ...",
+  "version": 3,
   "domains": [
     {
       "domain": "database",
@@ -202,10 +203,13 @@ Only relevant if you're writing or maintaining a master/dispatcher skill (see [`
       ],
       "project_signals": [
         "a schema.zmodel, schema.prisma, or migrations/ file or directory",
-        "package.json dependency: prisma, drizzle-orm, or zenstack"
+        "package.json dependency: prisma, drizzle-orm, zenstack, typeorm, sequelize, knex, or mongoose"
       ],
       "path_patterns": [
-        "schema.prisma", "schema.zmodel", "migrations/", "drizzle/", "prisma/"
+        "schema.prisma", "schema.zmodel", "migrations/", "drizzle/", "prisma/", "typeorm/", "models/"
+      ],
+      "dependency_patterns": [
+        "prisma", "drizzle-orm", "zenstack", "typeorm", "sequelize", "knex", "mongoose"
       ],
       "depends_on": []
     }
@@ -218,8 +222,9 @@ Only relevant if you're writing or maintaining a master/dispatcher skill (see [`
 | `domain` | Internal identifier, matched against task/project evidence |
 | `skill` | The actual skill folder name to dispatch to |
 | `task_signals` | Plain-language description of what kind of task implies this domain — the fallback match when a knowledge-graph query has nothing to classify |
-| `project_signals` | Cheap, checkable evidence this domain exists in the current project |
-| `path_patterns` | Substrings used to classify a knowledge-graph query's returned file paths into this domain — the primary, evidence-grounded match |
+| `project_signals` | Human-readable prose, used only by the fallback path (direct `package.json`/`find` commands) when `graphify-out/.graphify_stack.json` doesn't exist |
+| `path_patterns` | Substrings matched against two different things depending on context: a knowledge-graph query's returned file paths (Step 3, task-to-domain matching), or `.graphify_stack.json`'s `notable_files`/`notable_dirs` (Step 2, project detection) |
+| `dependency_patterns` | npm package name substrings, matched against `.graphify_stack.json`'s `dependencies` list — this is what Step 2 checks first, before falling back to `project_signals` |
 | `depends_on` | Other domain names this one structurally requires (e.g. a client-side query library needs `frontend`) |
 
 **This file is dispatcher-only by convention, not by permission enforcement:** no sub-skill's `SKILL.md` references it, so a sub-skill genuinely has no way to discover it exists. Keep it that way — don't add a reference to it from any dispatched skill.
@@ -293,6 +298,9 @@ Not currently wired into CI — running it is a manual step (see `01-SETUP.md`, 
 ### Rule 0 — Create AGENTS.md
 Check for `AGENTS.md` at the project root. If missing, create it by copying `AGENT-STANDING-RULES.md` verbatim. Never skip; never summarize.
 
+### Rule 0b — Offer to gitignore local tooling artifacts
+Check whether this project's `.gitignore` already lists `graphify-out/`. If not, ask once, explicitly — never add it silently. If the answer is no, don't ask again for the rest of the session. Runs immediately after Rule 0, before Rule 1.
+
 ### Rule 1 — Knowledge graph before everything
 Run `test -f graphify-out/graph.json`. If exists, query it. If not, invoke the `graphify` skill by name. No exceptions for "simple" requests.
 
@@ -306,8 +314,7 @@ Four steps in order:
 3. Present plan: what you'll do + what you won't + what done looks like. Hard stop.
 4. Act only after explicit yes.
 
-### Rule 4 — Record real edge cases after finishing
-Append a dated entry to `references/edge-cases.md` inside the skill folder if the skill's instructions didn't cover something you had to figure out. If uncertain whether it qualifies, don't write it. This rule is a wrap-up, not a gate.
+**There is no standalone Rule 4.** Recording real edge cases after finishing is governed entirely by the injected self-improvement protocol (see `SKILL.md` structure above and `config/SELF-IMPROVEMENT-PROTOCOL.md`), not by a standing rule in `AGENT-STANDING-RULES.md` — unlike clarification, which is deliberately enforced in both places. Worth knowing so you edit the right file if this behavior ever needs to change.
 
 ---
 
