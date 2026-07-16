@@ -106,10 +106,12 @@ fall back to direct detection using each domain's `project_signals`:
 
 ```bash
 # Fallback only -- adapt the greps to what manifest.json's project_signals
-# actually lists, don't hardcode this exact command set if it has changed:
+# actually lists, don't hardcode this exact command set if it has changed.
+# Kept in sync with path_patterns across all domains as of manifest v3 --
+# if path_patterns gains a new file/dir name, mirror it here too:
 test -f package.json && cat package.json
-find . -maxdepth 3 -iname "schema.zmodel" -o -iname "schema.prisma" -o -iname "playwright.config.*" 2>/dev/null
-find . -maxdepth 3 -type d \( -iname "components" -o -iname "migrations" -o -iname "e2e" \) 2>/dev/null
+find . -maxdepth 3 -iname "schema.zmodel" -o -iname "schema.prisma" -o -iname "playwright.config.*" -o -iname "drizzle.config.*" 2>/dev/null
+find . -maxdepth 3 -type d \( -iname "components" -o -iname "migrations" -o -iname "e2e" -o -iname "prisma" -o -iname "drizzle" -o -iname "typeorm" -o -iname "models" \) 2>/dev/null
 ```
 
 A domain is **present** if at least one of its `project_signals` is found.

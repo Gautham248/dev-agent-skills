@@ -414,11 +414,3 @@ reviewer knows where to focus.
   naming, PR format, and guardrails reference
 - [`references/edge-cases.md`](./references/edge-cases.md) — known edge cases
   and how to handle them
-
-## Self-improvement
-
-If you encounter an edge case not covered by this skill:
-
-1. Append it to `references/edge-cases.md` under a new dated entry
-2. Format: date, condition, and exact handling steps used
-3. Do not modify any other section of this skill
