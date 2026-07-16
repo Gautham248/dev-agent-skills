@@ -234,19 +234,27 @@ Follow the fix-bug skill for this: [description of bug]
 
 **Root cause options:**
 1. The task's wording didn't clearly imply the domain, and the project's knowledge graph had nothing relevant to return either (most likely for a brand-new feature with no existing code to find) — see `HISTORY.md`'s round-2 entry for why this specific case is a known, not-yet-fully-closed limitation.
-2. `coding-standards/references/manifest.json`'s `project_signals` or `path_patterns` for that domain don't match this project's actual conventions (e.g. a non-standard file location for a schema file).
-3. The dispatcher applied a domain that isn't actually present — this should trigger a clarifying question per its own instructions (see `02-USAGE.md`), not silently apply. If it silently applied instead of asking, that's a protocol violation.
+2. `coding-standards/references/manifest.json`'s `dependency_patterns` or `path_patterns` for that domain don't match this project's actual conventions (e.g. a non-standard file location for a schema file, or a package name genuinely not on the list — see `HISTORY.md`'s later entry on the manifest being broadened once already for exactly this reason).
+3. `graphify-out/.graphify_stack.json` is missing or stale — Step 2 falls back to direct detection in this case, but if the fallback itself is also missing a signal, the same broadening fix applies.
+4. The dispatcher applied a domain that isn't actually present — this should trigger a clarifying question per its own instructions (see `02-USAGE.md`), not silently apply. If it silently applied instead of asking, that's a protocol violation.
 
-**What to do:** Be explicit about the domain in your request if you know it applies — "this touches the database too" is enough to unstick a wording-only miss. For the manifest mismatch case, check `project_signals`/`path_patterns` for that domain against your actual project layout and consider whether they need broadening (see `03-MANAGING-SKILLS.md`'s "Writing a master/dispatcher skill" section).
+**What to do:** Be explicit about the domain in your request if you know it applies — "this touches the database too" is enough to unstick a wording-only miss. For the manifest mismatch case, check `dependency_patterns`/`path_patterns` for that domain against your actual project's dependencies and layout, and consider whether they need broadening (see `03-MANAGING-SKILLS.md`'s "Writing a master/dispatcher skill" section).
 
 **Diagnosis:**
 ```bash
+# Check the manifest's current coverage for a domain
 python3 -c "
 import json
 m = json.load(open('coding-standards/references/manifest.json'))
 for d in m['domains']:
-    print(d['domain'], '->', d['project_signals'])
+    print(d['domain'], '-> dependency_patterns:', d['dependency_patterns'])
 "
+```
+
+```bash
+# Check what graphify actually detected for this project -- if your
+# dependency/file isn't in here, that's why the manifest match missed it
+cat graphify-out/.graphify_stack.json 2>/dev/null || echo "no stack file -- Step 2 used the fallback path instead"
 ```
 
 ---

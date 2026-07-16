@@ -202,8 +202,9 @@ your-dispatcher-<domain-b>/
 ```
 
 - `task_signals` — what kind of request implies this domain, in plain language, for matching against task wording as a fallback.
-- `project_signals` — cheap, checkable evidence this domain actually exists in the current project (a dependency, a file, a directory).
-- `path_patterns` — used to classify files returned by a knowledge-graph query into a domain, so matching can be grounded in what the task actually touches rather than guessed from wording alone.
+- `project_signals` — human-readable prose, used only by the fallback path (direct detection commands) if `graphify`'s stack file is somehow missing.
+- `path_patterns` — matched against two different things depending on context: a knowledge-graph query's returned file paths (task-to-domain matching), or `graphify-out/.graphify_stack.json`'s `notable_files`/`notable_dirs` (project detection).
+- `dependency_patterns` — npm package name substrings, matched against `.graphify_stack.json`'s `dependencies` list. This is what project detection checks first now — see below.
 - `depends_on` — other domains this one structurally requires (e.g. a client-side query library needs a frontend to exist at all) — lets the dispatcher surface a specific architectural mismatch instead of a generic "not installed" question.
 
 **Critically: no sub-skill references the manifest.** Only the dispatcher's own `SKILL.md` is told it exists. This is what makes it function as dispatcher-only without needing any harness-level permission configuration — a sub-skill genuinely can't discover a file nothing tells it exists.
@@ -211,7 +212,7 @@ your-dispatcher-<domain-b>/
 ### The dispatcher's own logic, in order
 
 1. Apply anything that's universal across all domains directly and unconditionally — no dispatch decision needed for these.
-2. Investigate the project against each domain's `project_signals` — cheap checks, not a graph build; nothing here is worth caching between sessions unless the specific step has also been marked `Session-reusable:` (see "Opting into session-memory" above — `coding-standards` does this for exactly this step).
+2. Investigate the project against each domain's `dependency_patterns` and `path_patterns` by reading `graphify-out/.graphify_stack.json` — written by `graphify` itself as a normal part of building the knowledge graph (see `graphify/SKILL.md`'s Step 2.6), not by running independent detection commands. This is what lets project detection inherit the graph's own staleness handling instead of needing a separate cache. Only falls back to direct `package.json`/`find` commands, matched against `project_signals`, if that file is somehow missing. Nothing here is worth caching *within* a session beyond what's already covered — unless the specific reading step has also been marked `Session-reusable:` (see "Opting into session-memory" above — `coding-standards` does this for exactly this step).
 3. Match the task against domains — prefer grounding this in an actual knowledge-graph query classified via `path_patterns` over matching on task wording alone; fall back to wording only when the graph has nothing to return.
 4. A domain that's matched but not present in the project is a signal to ask, not to silently apply or silently skip — same for a domain whose `depends_on` isn't satisfied.
 5. Dispatch to each matched, present, unambiguous domain's skill via the skill-loading tool, by name — passing along what's already been established (which domains are present, what the task is) so the dispatched skill doesn't have to re-investigate from scratch.
