@@ -7,9 +7,12 @@ description: >
   the same kind of bug report in a local, not-yet-GitHub-connected repository —
   the clarification and investigation steps still apply; only the clone/PR
   mechanics differ (see Step 0). Queries the repository's knowledge graph to
-  find the relevant file, applies a minimal targeted fix, commits it on a new
-  branch, opens a pull request, and notifies the developer. Never merges.
-  Never deletes files. Never touches more than what the bug report describes.
+  find the relevant file and applies a minimal targeted fix. Only commits,
+  pushes, and opens a pull request when the developer explicitly asks — by
+  default it stops at the edited file for the developer to review. Never
+  merges. Never deletes files. Never touches more than what the bug report
+  describes.
+graph-memory: true
 ---
 
 <!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->
@@ -22,6 +25,12 @@ While using this skill, and especially when you finish, read and follow the self
 ../config/SELF-IMPROVEMENT-PROTOCOL.md
 (Append real edge cases to this skill's own references/edge-cases.md — create it if missing. See the protocol file for what qualifies.)
 <!-- END dev-agent-skills self-improvement protocol -->
+
+<!-- BEGIN dev-agent-skills graph-memory protocol (managed by setup.sh -- do not edit this block manually; edit GRAPH-MEMORY-PROTOCOL.md instead) -->
+This skill opted in to graph-memory (graph-memory: true). At each point marked
+'Graph-memory:' below, read and follow the graph-memory protocol at:
+../config/GRAPH-MEMORY-PROTOCOL.md
+<!-- END dev-agent-skills graph-memory protocol -->
 
 # Fix bug
 
@@ -173,6 +182,10 @@ Parse the output. Every result line follows this format:
 ```
 NODE <name> [src=<filepath> loc=L<n> community=<n>]
 ```
+
+**Graph-memory:** before relying on these results, check whether anything
+here is already flagged as a known dead end or a correction — see
+`GRAPH-MEMORY-PROTOCOL.md`.
 
 Extract every unique `src=` value. Count how many NODE lines reference each
 file — more references means higher relevance to the query. Sort by count
@@ -360,6 +373,10 @@ Step 0 determined applied:
 
 If confidence is medium or low, explain what you were uncertain about so the
 reviewer knows where to focus.
+
+**Graph-memory:** now that the real outcome is known, record it — see
+`GRAPH-MEMORY-PROTOCOL.md`. Be honest about `useful`/`dead_end`/`corrected`;
+this is not a place to default to `useful` for convenience.
 
 ## What the agent must NEVER do
 

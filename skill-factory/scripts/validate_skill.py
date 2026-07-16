@@ -24,7 +24,7 @@ except ImportError:
     yaml = None
 
 ALLOWED_FRONTMATTER_KEYS = {
-    "name", "description", "license", "compatibility", "allowed-tools", "session-memory", "metadata"
+    "name", "description", "license", "compatibility", "allowed-tools", "session-memory", "graph-memory", "metadata"
 }
 
 # Known dev-agent-skills roster, kept here so a fresh clone still gets a useful
@@ -132,6 +132,23 @@ def validate(skill_path: Path, roster: set[str]):
             warn(warnings, "Found a 'Session-reusable:' marker in the body, but 'session-memory: true' isn't "
                             "set in frontmatter -- setup.sh won't inject the protocol pointer, so this marker "
                             "won't mean anything to an agent reading it. Add 'session-memory: true'.")
+
+    # --- graph-memory ---
+    if "graph-memory" in frontmatter:
+        gm_value = frontmatter["graph-memory"]
+        if not isinstance(gm_value, bool):
+            fail(errors, f"'graph-memory' must be a boolean (true/false), got {gm_value!r}.")
+        elif gm_value is True:
+            has_marker = bool(re.search(r"Graph-memory:", body))
+            if not has_marker:
+                warn(warnings, "'graph-memory: true' is set, but no point in this skill's body is marked "
+                                "'Graph-memory:' -- the flag alone does nothing. Mark both the before-query-reliance "
+                                "check and the after-finishing save-result point, or remove the flag.")
+    else:
+        if re.search(r"Graph-memory:", body):
+            warn(warnings, "Found a 'Graph-memory:' marker in the body, but 'graph-memory: true' isn't "
+                            "set in frontmatter -- setup.sh won't inject the protocol pointer, so this marker "
+                            "won't mean anything to an agent reading it. Add 'graph-memory: true'.")
 
     # --- name ---
     name = str(frontmatter.get("name", "")).strip()
