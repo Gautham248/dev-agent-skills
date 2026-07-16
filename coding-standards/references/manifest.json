@@ -11,14 +11,14 @@
         "styling"
       ],
       "project_signals": [
-        "package.json dependency: react, svelte, vue, solid-js, @angular/core, preact, or astro",
+        "package.json dependency: react, svelte, vue, solid-js, @angular/core, preact, astro, or nuxt",
         "a components/, src/routes/, or src/lib/components/ directory"
       ],
       "path_patterns": [
         "src/components/", "src/lib/components/", ".tsx", ".jsx", ".svelte", ".vue", ".astro"
       ],
       "dependency_patterns": [
-        "react", "svelte", "vue", "solid-js", "@angular/core", "preact", "astro"
+        "react", "svelte", "vue", "solid-js", "@angular/core", "preact", "astro", "nuxt"
       ],
       "depends_on": []
     },
@@ -30,14 +30,14 @@
         "a background or cron job"
       ],
       "project_signals": [
-        "package.json dependency: express, hono, fastify, koa, or next (for API routes)",
+        "package.json dependency: express, hono, fastify, koa, next (for API routes), or @nestjs/core",
         "a src/routes/api/, src/server/, or api/ directory"
       ],
       "path_patterns": [
         "src/routes/api/", "src/server/", "api/", "middleware"
       ],
       "dependency_patterns": [
-        "express", "hono", "fastify", "koa", "next"
+        "express", "hono", "fastify", "koa", "next", "@nestjs/core"
       ],
       "depends_on": []
     },
