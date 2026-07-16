@@ -7,9 +7,11 @@ description: >
   the same kind of bug report in a local, not-yet-GitHub-connected repository —
   the clarification and investigation steps still apply; only the clone/PR
   mechanics differ (see Step 0). Queries the repository's knowledge graph to
-  find the relevant file, applies a minimal targeted fix, commits it on a new
-  branch, opens a pull request, and notifies the developer. Never merges.
-  Never deletes files. Never touches more than what the bug report describes.
+  find the relevant file and applies a minimal targeted fix. Only commits,
+  pushes, and opens a pull request when the developer explicitly asks — by
+  default it stops at the edited file for the developer to review. Never
+  merges. Never deletes files. Never touches more than what the bug report
+  describes.
 graph-memory: true
 ---
 
