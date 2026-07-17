@@ -15,11 +15,13 @@ None of these substitute for either of the others. A skill can opt into any comb
 At the marked point, before acting on what a graph query returned:
 
 ```bash
-graphify reflect
+graphify reflect --if-stale
 cat graphify-out/reflections/LESSONS.md 2>/dev/null
 ```
 
-Cheap and deterministic — no LLM call, typically well under a second — safe to run every time this point is reached, not something to ration.
+`--if-stale` is a real, working flag (confirmed by testing, though it doesn't appear in `graphify reflect --help`'s own output) — it skips the rebuild entirely when `LESSONS.md` is already newer than every input, making a second check later in the same session close to free rather than merely cheap. Omit it if you specifically need to force a fresh aggregation.
+
+Cheap and deterministic either way — no LLM call, typically well under a second — safe to run every time this point is reached, not something to ration.
 
 Check whether any node or question you're about to rely on appears under **Known dead ends** or **Corrections**. If it does:
 
