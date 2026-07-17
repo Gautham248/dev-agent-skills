@@ -87,6 +87,11 @@ Ask the developer for:
 3. **Environment** — production / staging / local
 4. **Reviewer** — GitHub username to assign on the PR (default: the reporter) —
    only applicable if a PR will actually be opened (see Step 0)
+5. **Commit & push preference** — after the fix is applied, should the agent
+   commit and push it (and open a PR), or stop at the edited file for the
+   developer to review and handle git themselves? **Default: do NOT commit or
+   push.** Ask this explicitly and wait for an answer — never commit or push
+   on your own initiative just because the fix is ready.
 
 Do not proceed without the bug description.
 
@@ -285,11 +290,18 @@ revert and redo.
 
 ## Step 10 — Commit
 
-**Only if Step 0 determined a git repository exists, and the developer wants
-git tracking for this change.** Otherwise, report the change made and stop —
-there is no commit to make.
+**Gate — do not commit unless BOTH are true:**
 
-Stage only the file you changed. Never `git add .`.
+1. Step 0 determined a git repository exists, AND
+2. The developer explicitly opted in to committing (see Step 1, item 5).
+
+If the developer did not ask for a commit — or did not answer — **stop here.**
+Report the change you made to the file (Step 12) and let the developer commit
+it themselves. Committing without an explicit go-ahead is exactly the behaviour
+this skill must avoid.
+
+Only when the developer has confirmed: stage only the file you changed. Never
+`git add .`.
 
 ```bash
 git -C "$REPO_DIR" add <target-file-path>
@@ -298,9 +310,12 @@ git -C "$REPO_DIR" commit -m "[agent] fix: <bug description, max 60 chars>"
 
 ## Step 11 — Push and open the PR
 
-**Only applies if this repository has a real GitHub remote and the developer
-wants a PR opened.** A local-only repository with no GitHub remote has nothing
-for this step to push to — report the local commit and stop instead.
+**Gate — only run this step if ALL are true:** a commit was actually made in
+Step 10 (i.e. the developer opted in), this repository has a real GitHub
+remote, and the developer wants a PR opened (Step 1, item 5). If the developer
+only asked for the fix — or did not explicitly ask to push — do not push and
+do not open a PR. A local-only repository with no GitHub remote likewise has
+nothing to push to — report the local commit and stop instead.
 
 ```bash
 git -C "$REPO_DIR" push origin agent/fix/<slug>-<date>
@@ -381,6 +396,8 @@ this is not a place to default to `useful` for convenience.
 ## What the agent must NEVER do
 
 - Merge the PR — humans merge, always.
+- Commit or push a fix without the developer's explicit go-ahead (see Step 1,
+  item 5, and Steps 10–11). Default is to stop at the edited file.
 - Delete any file.
 - Push directly to `main`.
 - Fix more than what the bug description describes.

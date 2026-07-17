@@ -14,6 +14,7 @@ in your AI IDE instantly.
 | [`coding-standards-e2e`](./coding-standards-e2e/) | Company conventions for writing Playwright end-to-end tests -- directory structure, centralized test-ID selec… |
 | [`coding-standards-frontend`](./coding-standards-frontend/) | Company frontend conventions for components, client state, and styling -- the three-tier component structure… |
 | [`coding-standards-project-organization`](./coding-standards-project-organization/) | Company conventions for where code lives and how the project is structured -- directory layout, file naming,… |
+| [`coding-standards-tailwind`](./coding-standards-tailwind/) | Company conventions for wiring and using Tailwind CSS v4 -- CSS-first @theme configuration (no tailwind.confi… |
 | [`coding-standards-tanstack-query`](./coding-standards-tanstack-query/) | Company conventions for client-side server-state with TanStack Query (or your framework's async-query library… |
 | [`eslint-rule-author`](./eslint-rule-author/) | Use when authoring or modifying rules in a custom ESLint plugin — adding a new rule, fixing a false positive… |
 | [`first-principles-review`](./first-principles-review/) | Critical, first-principles PR review that enumerates and challenges every assumption the author made, traces… |
