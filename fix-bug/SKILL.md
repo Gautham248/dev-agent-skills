@@ -248,6 +248,24 @@ The fix must be:
 - **Correct** — verify the fix makes sense by re-reading the file after applying it.
 - **Consistent** with any convention skill loaded in Step 6.
 
+If the fix changes an existing function's signature or behavior (not a
+constant/value swap), check its blast radius before finalizing:
+
+```bash
+graphify affected "<function or symbol being changed>" --relation calls --depth 2 --graph "$GRAPH_FILE"
+```
+
+Cheap and fast (well under a second, no LLM) — safe to run every time this
+applies, not something to skip for a fix that seems simple. This is
+information for the plan, not a reason to expand scope: if it returns
+callers beyond what the bug report describes, still fix only what the bug
+describes (still Minimal, still Surgical) — but name what else depends on
+this in the plan's "what I'm NOT going to do" section, so the developer
+confirming the plan knows the fix touches something more widely used than
+the bug report alone would suggest. Skip mentioning it if the affected list
+comes back empty or tightly scoped to just what the bug already describes —
+this only needs surfacing when it's actually informative.
+
 If you notice other issues in the file, do NOT fix them. Note them in the PR
 description only.
 
