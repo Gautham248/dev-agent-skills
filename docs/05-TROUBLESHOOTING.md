@@ -89,6 +89,26 @@ isn't set in frontmatter -- setup.sh won't inject the protocol pointer.
 
 ---
 
+### `validate_skill.py` warns about graph-memory being inconsistent
+
+Same two-part opt-in as session-memory, same fix — same root cause and same resolution. One real difference: graph-memory needs **two** markers (`**Graph-memory:**` before relying on query results, and again after finishing), not one. The validator only checks that at least one marker is present, so a skill with the flag set and only *one* of the two points marked will validate clean but not actually work as intended — that specific half-done state isn't currently caught mechanically. Check both points by hand when opting a skill in; see `fix-bug/SKILL.md`'s Step 4 and Step 12 for what both markers should look like.
+
+---
+
+### Agent isn't checking graph-memory before relying on graph query results
+
+**Symptom:** `fix-bug` or `plan-feature` proceeds on a graph query's results without ever mentioning `graphify reflect` or `LESSONS.md`, even though the skill has `graph-memory: true` set.
+
+**Root cause:** Same category as any other instruction-following gap — the pointer is injected correctly, but whether the agent actually acts on it in a given session is not independently enforced.
+
+**What to do:**
+```bash
+cat graphify-out/reflections/LESSONS.md 2>/dev/null || echo "no lessons recorded yet -- may explain why nothing was mentioned"
+```
+If lessons genuinely exist and weren't checked, say so directly: "Check `graphify reflect`'s output before relying on that — did you look at `LESSONS.md`?" If no lessons exist yet, there's nothing to have caught — this isn't a failure, it's an empty history.
+
+---
+
 ### Symlinks are broken after moving the repo
 
 **Symptom:** `ls -la ~/.claude/skills/fix-bug` shows a broken symlink (arrow pointing to a path that doesn't exist).
@@ -234,7 +254,7 @@ Follow the fix-bug skill for this: [description of bug]
 
 **Root cause options:**
 1. The task's wording didn't clearly imply the domain, and the project's knowledge graph had nothing relevant to return either (most likely for a brand-new feature with no existing code to find) — see `HISTORY.md`'s round-2 entry for why this specific case is a known, not-yet-fully-closed limitation.
-2. `coding-standards/references/manifest.json`'s `dependency_patterns` or `path_patterns` for that domain don't match this project's actual conventions (e.g. a non-standard file location for a schema file, or a package name genuinely not on the list — see `HISTORY.md`'s later entry on the manifest being broadened once already for exactly this reason).
+2. `coding-standards/references/manifest.json`'s `dependency_patterns` or `path_patterns` for that domain don't match this project's actual conventions (e.g. a non-standard file location for a schema file, or a package name genuinely not on the list — see `HISTORY.md` for the manifest broadening entries covering exactly this reason, more than once already).
 3. `graphify-out/.graphify_stack.json` is missing or stale — Step 2 falls back to direct detection in this case, but if the fallback itself is also missing a signal, the same broadening fix applies.
 4. The dispatcher applied a domain that isn't actually present — this should trigger a clarifying question per its own instructions (see `02-USAGE.md`), not silently apply. If it silently applied instead of asking, that's a protocol violation.
 

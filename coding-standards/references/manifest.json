@@ -1,6 +1,6 @@
 {
-  "_comment": "Stable routing table: domain name -> sub-skill + how to detect it. Only coding-standards/SKILL.md is told this file exists -- no sub-skill's SKILL.md references it, so it functions as master-only without needing any permission.skill config. Update this when a new coding-standards-* sub-skill is added; the per-project 'which domains actually apply here' decision is NOT stored here -- that's re-detected fresh every session (see SKILL.md). path_patterns classify files (from a graphify query, or from graphify-out/.graphify_stack.json's notable_files/notable_dirs) into a domain. dependency_patterns match against .graphify_stack.json's dependencies list -- this is what Step 2 checks first, falling back to direct package.json/find commands only if that file doesn't exist. depends_on expresses that a domain structurally requires another to exist (e.g. tanstack-query needs a frontend to attach a query client to) -- used to surface the deeper mismatch, not just 'library not installed'. project_signals stay as human-readable prose, used only by the fallback path when interpreting raw command output directly. None of these lists are or can be exhaustive -- new tools appear constantly. Extend them when a real project surfaces a gap (see HISTORY.md's round-2 entry for the TypeORM/Sequelize gap this addressed) rather than trying to enumerate everything upfront.",
-  "version": 3,
+  "_comment": "Stable routing table: domain name -> sub-skill + how to detect it. Only coding-standards/SKILL.md is told this file exists -- no sub-skill's SKILL.md references it, so it functions as master-only without needing any permission.skill config. Update this when a new coding-standards-* sub-skill is added; the per-project 'which domains actually apply here' decision is NOT stored here -- that's re-detected fresh every session (see SKILL.md). path_patterns classify files (from a graphify query, or from graphify-out/.graphify_stack.json's notable_files/notable_dirs) into a domain. dependency_patterns match against .graphify_stack.json's dependencies list -- this is what Step 2 checks first, falling back to direct package.json/find commands only if that file doesn't exist. depends_on expresses that a domain structurally requires another to exist (e.g. tanstack-query needs a frontend to attach a query client to) -- used to surface the deeper mismatch, not just 'library not installed'. project_signals stay as human-readable prose, used only by the fallback path when interpreting raw command output directly. None of these lists are or can be exhaustive -- new tools appear constantly. Extend them when a real project surfaces a gap (see HISTORY.md's round-2 entry for the TypeORM/Sequelize gap this addressed) rather than trying to enumerate everything upfront. v4 added the 'tailwind' domain (styling conventions split out of frontend's general scope), depends_on frontend the same way tanstack-query does.",
+  "version": 4,
   "domains": [
     {
       "domain": "frontend",
@@ -75,6 +75,27 @@
       ],
       "dependency_patterns": [
         "@tanstack/react-query", "@tanstack/vue-query", "@tanstack/svelte-query", "@tanstack/solid-query", "@tanstack/query-core"
+      ],
+      "depends_on": ["frontend"]
+    },
+    {
+      "domain": "tailwind",
+      "skill": "coding-standards-tailwind",
+      "task_signals": [
+        "setting up or configuring Tailwind CSS in a project",
+        "adding or changing a design token, theme color, spacing, or radius value",
+        "styling a component, or choosing between an arbitrary value and a token",
+        "explicit mention of Tailwind, utility-first CSS, cn(), or tailwind-variants"
+      ],
+      "project_signals": [
+        "package.json dependency: tailwindcss",
+        "an app.css (or equivalent) containing an @theme block, or a tailwind.config.js/ts file"
+      ],
+      "path_patterns": [
+        "app.css", "@theme", "tailwind.config", "postcss.config"
+      ],
+      "dependency_patterns": [
+        "tailwindcss", "@tailwindcss/vite", "@tailwindcss/postcss"
       ],
       "depends_on": ["frontend"]
     },

@@ -85,7 +85,7 @@ While using this skill, and especially when you finish, read and follow the self
 <!-- END dev-agent-skills self-improvement protocol -->
 ```
 
-A third block is added *conditionally* — only if your skill's frontmatter sets `session-memory: true`:
+Two more blocks are added *conditionally*, each independently, only if your skill's frontmatter sets the matching flag:
 
 ```
 <!-- BEGIN dev-agent-skills session-memory protocol ... -->
@@ -93,11 +93,17 @@ This skill opted in to session-memory (session-memory: true). Whenever you reach
 marked 'Session-reusable:' below, read and follow the session-memory protocol at:
 ../config/SESSION-MEMORY-PROTOCOL.md
 <!-- END dev-agent-skills session-memory protocol -->
+
+<!-- BEGIN dev-agent-skills graph-memory protocol ... -->
+This skill opted in to graph-memory (graph-memory: true). At each point marked
+'Graph-memory:' below, read and follow the graph-memory protocol at:
+../config/GRAPH-MEMORY-PROTOCOL.md
+<!-- END dev-agent-skills graph-memory protocol -->
 ```
 
-See "Opting into session-memory" below for whether your skill should set that flag.
+See "Opting into session-memory" and "Opting into graph-memory" below for whether your skill should set either flag — they're independent, a skill can have neither, either, or both.
 
-**Do not edit any of these blocks manually.** They are regenerated on every `setup.sh` run, so any manual edits will be overwritten. If you need to modify what a protocol says, edit `CLARIFICATION-PROTOCOL.md`, `SELF-IMPROVEMENT-PROTOCOL.md`, or `SESSION-MEMORY-PROTOCOL.md` in the `config/` directory — those changes will propagate to every skill (or every opted-in skill, for session-memory) on the next `setup.sh` run.
+**Do not edit any of these blocks manually.** They are regenerated on every `setup.sh` run, so any manual edits will be overwritten. If you need to modify what a protocol says, edit `CLARIFICATION-PROTOCOL.md`, `SELF-IMPROVEMENT-PROTOCOL.md`, `SESSION-MEMORY-PROTOCOL.md`, or `GRAPH-MEMORY-PROTOCOL.md` in the `config/` directory — those changes will propagate to every skill (or every opted-in skill, for the two conditional protocols) on the next `setup.sh` run.
 
 Your skill's own instructions go below these blocks, unchanged.
 
@@ -109,11 +115,25 @@ If your skill has a step like this:
 
 1. Add `session-memory: true` to your skill's frontmatter.
 2. Mark the specific step (not the whole skill) with a `**Session-reusable:**` lead-in at the start of its instructions, briefly stating what would invalidate reuse for this specific check — see `coding-standards/SKILL.md`'s Step 2 or `sync-prs/SKILL.md`'s Step 1 for real examples of the wording.
-3. Run `bash setup.sh` — this injects the third protocol block into your skill automatically.
+3. Run `bash setup.sh` — this injects the protocol block into your skill automatically.
 
 The flag and the marker only mean something together — `validate_skill.py` will warn you if you set the flag without marking any step, or mark a step without setting the flag (see [`06-REFERENCE.md`](./06-REFERENCE.md) for the full validator check list).
 
 Full mechanism details, including exactly what "reuse" means and how it must be communicated in the agent's output, live in `config/SESSION-MEMORY-PROTOCOL.md`.
+
+### Opting into graph-memory
+
+A different, narrower case from session-memory above — this one only fits a skill that genuinely queries the knowledge graph to understand code, then later knows a real outcome. Two required ingredients: a point where the skill relies on graph query results, and a later point where the skill knows whether that reliance actually paid off. `fix-bug` (query in Step 4, outcome known in Step 12) and `plan-feature` (query in Step 4, outcome known in Step 7) both have this shape naturally. `coding-standards` was considered and deliberately left out — it dispatches to another skill and never receives a completion signal back, so it has no honest point to record an outcome from.
+
+If your skill has both a query point and a real outcome point:
+
+1. Add `graph-memory: true` to your skill's frontmatter.
+2. Mark **both** points with a `**Graph-memory:**` lead-in — one at the point you're about to rely on query results (check `graphify reflect`'s output first), one at the point the real outcome is known (call `save-result` honestly). See `fix-bug/SKILL.md`'s Step 4 and Step 12, or `plan-feature/SKILL.md`'s Step 4 and Step 7, for real examples of the wording.
+3. Run `bash setup.sh` — this injects the protocol block into your skill automatically.
+
+Same consistency rule as session-memory: the flag and at least one marker only mean something together — `validate_skill.py` warns on either one without the other.
+
+Full mechanism details — including the tested, documented limitation that a renamed or deleted node's signal silently disappears from consideration rather than showing stale — live in `config/GRAPH-MEMORY-PROTOCOL.md`.
 
 ### TypeScript helper scripts
 
