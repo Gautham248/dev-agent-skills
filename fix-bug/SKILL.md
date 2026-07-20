@@ -411,6 +411,27 @@ reviewer knows where to focus.
 `GRAPH-MEMORY-PROTOCOL.md`. Be honest about `useful`/`dead_end`/`corrected`;
 this is not a place to default to `useful` for convenience.
 
+**If Step 6 loaded a convention skill, and something concrete within this
+same session revealed its guidance was wrong** — the developer explicitly
+pushed back on it, or Step 9's re-read/verification showed it didn't
+actually fit — record that too, tagged to the convention skill's name
+rather than a code node:
+
+```bash
+graphify save-result --question "was the <domain> coding-standards guidance correct for this fix" \
+  --answer "<what was applied>" --nodes "coding-standards-<domain>" \
+  --outcome corrected --correction "<what's actually true>"
+```
+
+**Do not record a routine `useful` outcome for convention guidance** —
+confirmed by testing this specific case: a domain name isn't a real graph
+node, so `reflect` has nothing to structurally verify it against, and a
+`useful` signal tagged this way produces no visible lesson at all, only a
+silent increment to a summary count. `corrected` and `dead_end` still
+surface correctly regardless, since they carry their own answer/correction
+text — this asymmetry is exactly why only genuine corrections are worth
+recording here, not everything.
+
 ## What the agent must NEVER do
 
 - Merge the PR — humans merge, always.
