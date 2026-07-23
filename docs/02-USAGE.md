@@ -106,6 +106,22 @@ A small number of skills (`coding-standards`, `sync-prs` — see [`06-REFERENCE.
 
 ---
 
+## Graph-memory — when the agent references something it learned before
+
+`fix-bug` and `plan-feature` (currently the only two — see [`06-REFERENCE.md`](./06-REFERENCE.md)) opted into a second, different kind of memory: `graphify`'s own built-in `save-result`/`reflect` mechanism, which persists **across sessions and across developers**, not just within one conversation the way session-memory does. You may see something like:
+
+> "Note: an earlier session marked this same query path as a dead end — looking elsewhere."
+
+or, in the final report:
+
+> Recorded outcome: corrected — the original understanding of this function was wrong.
+
+**Also expected, correct behavior.** This is a separate mechanism from session-memory above — different purpose (was a specific part of the codebase graph actually useful, not "did I already check this in this conversation"), different lifetime (persists on disk, not reset per conversation). It's cheap and re-evaluated fresh on every run — not a stale cache silently trusted forever.
+
+**One honest limitation worth knowing:** if code gets renamed or restructured, an old reference to it is dropped from consideration automatically — but silently, with no visible warning that it happened. If a lesson you'd expect to see about a piece of code isn't showing up, that may be why; it's not a sign the mechanism failed.
+
+---
+
 ## The clarification step — what to expect and how to respond
 
 After loading the skill and querying the graph, the agent will do one of two things:

@@ -49,7 +49,7 @@ Replace the path with wherever you actually want it. The examples in this doc us
 bash setup.sh
 ```
 
-This is the only command you need. It does everything: injects the governance protocols into every skill (the session-memory protocol only into skills that opt into it), configures OpenCode globally, regenerates the README table, and symlinks the skills into every detected harness.
+This is the only command you need. It does everything: injects the governance protocols into every skill (session-memory and graph-memory only into skills that opt into each), configures OpenCode globally, regenerates the README table, and symlinks the skills into every detected harness.
 
 **What you should see** (real output, with your actual path):
 
@@ -62,8 +62,7 @@ Found 19 skills: coding-standards-backend coding-standards-database coding-stand
   ✓ Clarification protocol — injected into 0 skill(s), refreshed in 19
   ✓ Self-improvement protocol — injected into 0 skill(s), refreshed in 19
   ✓ Session-memory protocol — opted in: 2 skill(s) (injected 0 new, refreshed 2)
-  ℹ️  1 skill(s) still have the old bottom-of-file '## Self-improvement' section, now redundant with the injected pointer above: fix-bug
-      Harmless to leave (the injected pointer applies regardless)...
+  ✓ Graph-memory protocol — opted in: 2 skill(s) (injected 0 new, refreshed 2)
 
   ✓ OpenCode global config — /home/<you>/.config/opencode/opencode.json (permission.skill=allow; ...)
   ✓ README.md skills table — already up to date (19 skills)
@@ -77,7 +76,7 @@ Done. To pick up new skills (and refresh the clarification protocol) after a git
 
 **Why "refreshed," not "injected new," even on a first run:** the managed protocol blocks are committed to git, not generated only locally — whoever last touched a skill already ran `setup.sh` and committed the result. You'll only see "injected N new" for a skill that's genuinely never had a given protocol block before (a brand-new skill someone just added, or a protocol someone just opted a skill into for the first time).
 
-**Three protocols now, not two:** clarification and self-improvement are injected into every skill unconditionally, always. Session-memory is different — it's opt-in per skill (`session-memory: true` in that skill's frontmatter), so the count next to it reflects how many skills currently opt in, not the full skill count. Currently: `coding-standards` and `sync-prs`. See [`06-REFERENCE.md`](./06-REFERENCE.md) for what session-memory actually does, and [`03-MANAGING-SKILLS.md`](./03-MANAGING-SKILLS.md) for how to opt a new skill into it.
+**Four protocols now, not three:** clarification and self-improvement are injected into every skill unconditionally, always. Session-memory and graph-memory are different — each is opt-in per skill (`session-memory: true` / `graph-memory: true` in that skill's frontmatter), so the count next to each reflects how many skills currently opt in, not the full skill count. Session-memory: `coding-standards` and `sync-prs`. Graph-memory: `fix-bug` and `plan-feature`. See [`06-REFERENCE.md`](./06-REFERENCE.md) for what each protocol actually does, and [`03-MANAGING-SKILLS.md`](./03-MANAGING-SKILLS.md) for how to opt a new skill into either one.
 
 The specific harness lines you see depend on what's installed. Missing a harness line entirely means that harness isn't installed on this machine — that's fine.
 
@@ -86,15 +85,16 @@ The specific harness lines you see depend on what's installed. Missing a harness
   ✓ Clarification protocol — injected into 0 skill(s), refreshed in 19
   ✓ Self-improvement protocol — injected into 0 skill(s), refreshed in 19
   ✓ Session-memory protocol — opted in: 2 skill(s) (injected 0 new, refreshed 2)
+  ✓ Graph-memory protocol — opted in: 2 skill(s) (injected 0 new, refreshed 2)
   ✓ Claude Code — /home/<you>/.claude/skills (0 new links)
 ```
 "0 new, all refreshed" — this is correct. The script is idempotent.
 
-**Run setup.sh after removing `session-memory: true` from a skill's frontmatter:**
+**Run setup.sh after removing `session-memory: true` or `graph-memory: true` from a skill's frontmatter:**
 ```
   ✓ Session-memory protocol — opted in: 1 skill(s) (injected 0 new, refreshed 1), removed from 1 (opted out since last run)
 ```
-The pointer is actually removed from that skill's `SKILL.md` on this run — opting out takes effect immediately, same idempotent strip-and-rebuild logic as opting in.
+The pointer is actually removed from that skill's `SKILL.md` on this run — opting out takes effect immediately, same idempotent strip-and-rebuild logic for both protocols.
 
 ---
 
@@ -115,12 +115,16 @@ for dir in */; do
     grep -c "BEGIN dev-agent-skills session-memory protocol" "${dir}SKILL.md" > /dev/null \
       && echo "  session-memory: OK (opted in)" || echo "  session-memory: MISSING (opted in but not injected — re-run setup.sh)"
   fi
+  if grep -q "graph-memory: true" "${dir}SKILL.md"; then
+    grep -c "BEGIN dev-agent-skills graph-memory protocol" "${dir}SKILL.md" > /dev/null \
+      && echo "  graph-memory: OK (opted in)" || echo "  graph-memory: MISSING (opted in but not injected — re-run setup.sh)"
+  fi
 done
 ```
 
-Every skill should print `OK` for clarification and self-improvement. Only `coding-standards` and `sync-prs` (currently) should print a session-memory line at all — that's expected, not a gap, since it's opt-in.
+Every skill should print `OK` for clarification and self-improvement. Only `coding-standards` and `sync-prs` (currently) should print a session-memory line; only `fix-bug` and `plan-feature` (currently) should print a graph-memory line — that's expected, not a gap, since both are opt-in.
 
-Check the ordering is correct (clarification, then self-improvement, then session-memory if present):
+Check the ordering is correct (clarification, then self-improvement, then session-memory/graph-memory if present):
 
 ```bash
 for dir in */; do
@@ -128,16 +132,18 @@ for dir in */; do
   clar=$(grep -n "BEGIN dev-agent-skills clarification" "${dir}SKILL.md" | cut -d: -f1)
   si=$(grep -n "BEGIN dev-agent-skills self-improvement" "${dir}SKILL.md" | cut -d: -f1)
   sm=$(grep -n "BEGIN dev-agent-skills session-memory" "${dir}SKILL.md" | cut -d: -f1)
+  gm=$(grep -n "BEGIN dev-agent-skills graph-memory" "${dir}SKILL.md" | cut -d: -f1)
   order_ok="true"
   [ -n "$clar" ] && [ -n "$si" ] && [ "$clar" -ge "$si" ] && order_ok="false"
   [ -n "$sm" ] && [ -n "$si" ] && [ "$si" -ge "$sm" ] && order_ok="false"
+  [ -n "$gm" ] && [ -n "$si" ] && [ "$si" -ge "$gm" ] && order_ok="false"
   [ "$order_ok" = "true" ] && echo "${dir%/}: ORDER OK" || echo "${dir%/}: ORDER WRONG"
 done
 ```
 
 All 19 should print `ORDER OK`.
 
-Or, more thoroughly, run the repo's own validator against a skill directly, which checks this and considerably more (frontmatter correctness, description quality signals, line-count guidelines, and — for any skill with `session-memory: true` — that the flag and the `Session-reusable:` marker are actually consistent with each other):
+Or, more thoroughly, run the repo's own validator against a skill directly, which checks this and considerably more (frontmatter correctness, description quality signals, line-count guidelines, and — for any skill with `session-memory: true` or `graph-memory: true` — that the flag and its matching body marker are actually consistent with each other):
 
 ```bash
 python3 skill-factory/scripts/validate_skill.py coding-standards

@@ -144,6 +144,25 @@ specific step with `**Session-reusable:**`. Full mechanism in
 authoring guidance in
 [`03-MANAGING-SKILLS.md`](./03-MANAGING-SKILLS.md#opting-into-session-memory).
 
+## Graph-memory (opt-in, narrower still — only fits a specific shape)
+
+Also not injected by default. Narrower than session-memory in a different
+way: it only fits a skill that genuinely queries the knowledge graph to
+understand code, then later has a real, observable outcome to report on.
+Two required ingredients, both needed — a point where you're about to rely
+on graph query results, and a later point where you actually know whether
+that reliance paid off. If your skill only has the first (queries the graph
+but never reports a concrete outcome), this doesn't fit; don't force it in.
+
+If your skill genuinely has both: add `graph-memory: true` to your
+frontmatter and mark **both** points with `**Graph-memory:**` — one at the
+query-reliance point, one at the outcome point. Both are required; a skill
+with only one marked point is a half-finished opt-in the validator won't
+fully catch (see `05-TROUBLESHOOTING.md`). Full mechanism in
+[`GRAPH-MEMORY-PROTOCOL.md`](../config/GRAPH-MEMORY-PROTOCOL.md), full
+authoring guidance in
+[`03-MANAGING-SKILLS.md`](./03-MANAGING-SKILLS.md#opting-into-graph-memory).
+
 ## Installing an existing skillset
 
 If the skill (or set of skills) you want already exists in another repo —

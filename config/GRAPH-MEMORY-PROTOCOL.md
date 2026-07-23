@@ -15,11 +15,13 @@ None of these substitute for either of the others. A skill can opt into any comb
 At the marked point, before acting on what a graph query returned:
 
 ```bash
-graphify reflect
+graphify reflect --if-stale
 cat graphify-out/reflections/LESSONS.md 2>/dev/null
 ```
 
-Cheap and deterministic — no LLM call, typically well under a second — safe to run every time this point is reached, not something to ration.
+`--if-stale` is a real, working flag (confirmed by testing, though it doesn't appear in `graphify reflect --help`'s own output) — it skips the rebuild entirely when `LESSONS.md` is already newer than every input, making a second check later in the same session close to free rather than merely cheap. Omit it if you specifically need to force a fresh aggregation.
+
+Cheap and deterministic either way — no LLM call, typically well under a second — safe to run every time this point is reached, not something to ration.
 
 Check whether any node or question you're about to rely on appears under **Known dead ends** or **Corrections**. If it does:
 
@@ -43,6 +45,8 @@ graphify save-result \
 ```
 
 Be honest about the outcome — `useful` for a query result that actually helped, `dead_end` for one that led nowhere, `corrected` for one that turned out to be wrong once you actually checked. Recording `useful` by default because it's the path of least resistance defeats the entire point: the value of this system is entirely in the *accuracy* of what gets recorded, not the volume.
+
+**Tested, not assumed: `--nodes` doesn't have to name a real code node — `fix-bug` uses this to record outcomes about which `coding-standards` domain's guidance was applied, tagging with the domain's name instead of a function or file. But this changes what's worth recording.** `reflect` cross-references every node against the current graph to decide how to bucket it; a tag like `coding-standards-database` will never resolve, since it isn't code. Confirmed by testing: a `useful` outcome tagged this way produces no visible lesson anywhere, only a silent increment to the summary count, because there's no per-node section for something that can't be structurally verified. `dead_end` and `corrected` still surface correctly regardless, since they carry their own answer/correction text rather than depending on node resolution. **Practical result: for any non-code-node tag, only record `dead_end`/`corrected` — recording `useful` this way is pure noise with zero visible payoff.** This restriction doesn't apply to real code nodes, where all three outcomes work as intended.
 
 ## Anti-patterns — explicitly forbidden
 

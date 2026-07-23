@@ -159,6 +159,32 @@ print('notable_dirs:', s['notable_dirs'])
 " || echo "MISSING -- Step 2 will fall back to direct detection commands instead"
 ```
 
+### 6. `graph-memory` wiring — the two opted-in skills, both markers present
+
+```bash
+# Confirm exactly the two intended skills opted in, nothing else
+grep -l "graph-memory: true" */SKILL.md
+# expected: fix-bug/SKILL.md and plan-feature/SKILL.md, nothing else
+```
+
+```bash
+# Each opted-in skill needs BOTH markers (before-query check, after-finishing record) --
+# one marker alone means the flag only does half its job. Matching on the bold
+# markdown specifically, since the injected pointer text above also mentions
+# "Graph-memory:" once in its own explanation -- a plain grep would overcount.
+for skill in fix-bug plan-feature; do
+  echo "=== $skill ==="
+  grep -c '\*\*Graph-memory:\*\*' "$skill/SKILL.md"
+done
+# expected: 2 for each
+```
+
+```bash
+# The mechanism itself, independent of any skill -- confirm graphify's own
+# memory commands work at all on this machine
+graphify reflect 2>&1 | head -3
+```
+
 ---
 
 ## Post-import verification checklist
@@ -270,6 +296,16 @@ If you see something like *"Already confirmed earlier this session that this pro
 
 1. Did that fact actually get established earlier in this same conversation? Scroll back and check.
 2. Did anything happen in between that could have changed it (a dependency added, a schema file touched)? If yes and the agent didn't catch it, that's worth flagging — the protocol's own test requires checking this before reusing.
+
+### "Did a graph-memory reference actually check out?"
+
+If `fix-bug` or `plan-feature` mentions an earlier-flagged dead end or correction — different from session-memory above, since this can span *previous sessions*, not just this conversation:
+
+```bash
+cat graphify-out/reflections/LESSONS.md
+```
+
+Confirm the specific claim is actually in there, worded the way the agent described it. If a correction seems to be missing something you'd expect, remember the one known limitation: a renamed or deleted piece of code silently drops out of consideration rather than showing up as stale — check the current code directly if a lesson seems thinner than expected, rather than assuming the mechanism is broken.
 
 ### "Does the change actually work?"
 

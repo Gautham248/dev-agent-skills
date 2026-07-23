@@ -103,7 +103,38 @@ Three related items, finalized and applied together after a review comment surfa
 
 ---
 
+## Follow-up audit — manifest broadened a second time, fallback path brought back in sync, legacy footer removed
+
+A deliberate, narrow follow-up pass on just `graphify` and `fix-bug`, not a general rewrite — investigate specific open questions, close what turns out to be real, leave what isn't.
+
+**The manifest gap recurred, same failure class as before:** built a real mock project (NestJS + Vue + TanStack Vue Query) and ran the actual manifest-matching logic against it — confirmed NestJS was completely absent from the `backend` domain's `dependency_patterns`, same silent zero-coverage failure mode as the original TypeORM gap. Fixed the same way: `@nestjs/core` added to `backend`, `nuxt` added to `frontend`. This is the second time this specific list has needed broadening, not the first — worth being exact about the count rather than letting "broadened once" quietly go stale in the docs, which is exactly what happened until this entry was written.
+
+**A second, smaller gap found in the same pass:** `coding-standards`' fallback detection path (used only if `graphify-out/.graphify_stack.json` is somehow missing) had its `find` commands checked against `path_patterns`' round-3 broadening — and had drifted out of sync. `path_patterns` recognized `prisma/`, `drizzle/`, `typeorm/`, `models/` directories; the fallback's `find` command only ever searched for `components`, `migrations`, `e2e`. Brought back in sync, verified against a real project with a `typeorm/` directory and no recognized schema file.
+
+**`fix-bug`'s legacy `## Self-improvement` footer removed**, not just flagged — compared its exact text against `SELF-IMPROVEMENT-PROTOCOL.md` directly and confirmed it said nothing the injected pointer earlier in the same file didn't already cover more thoroughly. `setup.sh` no longer reports a redundant-footer skill as a result — the sample output in `01-SETUP.md` needed updating to match once this landed.
+
+**`graphify` itself investigated and left untouched, on purpose:** installed the real `graphifyy` package directly and confirmed `query`/`path`/`explain` all take a genuine, working `--graph` flag — the tool was never hardcoded to a fixed path, closing an open question from much earlier in this project's history. No code issue was found, so no code was changed. Separately, attempted to reproduce the `graphify-out/graphify-out` duplicate-nesting anomaly reported early on, using a clean install and a real test project — could not reproduce it. Honest negative result, not claimed as fixed; most likely explanation is a stale, git-committed `graphify-out/` from before Rule 0b existed, now considerably less likely to recur.
+
+---
+
+## `graph-memory` protocol added (opt-in) — `graphify`'s own save-result/reflect wired into `fix-bug` and `plan-feature`
+
+`graphify` has always shipped with a built-in, deterministic memory mechanism (`save-result`, `reflect`) that was never used by anything in this repo until now — discovered during the audit above, then deliberately tested for feasibility before being built into a feature, not assumed to be a good idea just because it existed.
+
+**Feasibility tested for real before committing to building it:** installed the real package, ran actual `save-result`/`reflect` cycles, confirmed both commands run in roughly 100ms with no LLM call at all — genuinely cheap, not a hidden ongoing cost. Specifically tested the one scenario that would have made this unsafe to ship: renamed a function referenced by existing saved outcomes, rebuilt the graph, and confirmed the renamed node's structural reliability signal disappeared cleanly from `LESSONS.md` rather than persisting as stale-but-shown-reliable. One real, honestly-documented limitation from this test: the dropping itself produces no visible warning anywhere in the output.
+
+**A fourth injected protocol, identical mechanism to `session-memory`, deliberately kept distinct in purpose:** three memory-flavored mechanisms now coexist on purpose, not by accident — self-improvement records that a *skill's instructions* were incomplete; session-memory avoids redundant re-checking *within one conversation*; graph-memory records whether a *specific part of the codebase graph* has reliably been useful, persisted *across* conversations and developers. `config/GRAPH-MEMORY-PROTOCOL.md` documents this distinction explicitly, given how easy three similarly-named mechanisms would be to blur together later.
+
+**Scoped to `fix-bug` and `plan-feature` only — `coding-standards` deliberately excluded, not overlooked.** Checked its actual step structure before assuming it fit the same shape as the other two: it dispatches to a sub-skill and never receives a completion signal back, so there's no honest point in its own flow to record whether a domain match was actually correct. Forcing the pattern in anyway would mean recording outcomes the skill can't actually observe — the same "don't force a pattern where it doesn't fit" discipline already applied when `coding-standards-e2e`'s single-tool detection was reviewed and confirmed correct by design, not a gap, in the audit above.
+
+**Each opted-in skill needs two marked points, not one** — `**Graph-memory:**` before relying on query results, and again once the real outcome is known — unlike `session-memory`'s single `**Session-reusable:**` marker. `fix-bug` (Step 4, Step 12) and `plan-feature` (Step 4, Step 7) both already had a clean query step and a clean final-report step, so both markers landed naturally rather than being forced in.
+
+**A real mistake caught before delivery, not after:** the first attempt at packaging this change only staged the new protocol file, silently omitting the four modified files, and a lazy filtered verification check let that slip through once. Caught by insisting on a fully independent second verification pass with unfiltered output before calling it done.
+
+---
+
 ## Current state snapshot (at time of writing)
 
-19 skills at the repo root: `coding-standards` + its 6 domain sub-skills, `eslint-rule-author`, `first-principles-review`, `fix-bug`, `graphify`, `investigate-issue`, `plan-feature`, `skill-add`, `skill-factory`, `skill-update`, `sync-prs`, `typescript-conventions`, `webapp-conventions`. Three managed protocols (clarification and self-improvement unconditional; session-memory opt-in, currently on 2 skills). Six standing rules (0, 0b, 1, 2, 3, and the meta-principle) in `AGENT-STANDING-RULES.md`. `coding-standards`' domain manifest at version 3, its detection fed by `graphify`'s own build rather than a separate pass. `validate_skill.py` fully passes across all 19.
+19 skills at the repo root: `coding-standards` + its 6 domain sub-skills, `eslint-rule-author`, `first-principles-review`, `fix-bug`, `graphify`, `investigate-issue`, `plan-feature`, `skill-add`, `skill-factory`, `skill-update`, `sync-prs`, `typescript-conventions`, `webapp-conventions`. Four managed protocols: clarification and self-improvement unconditional; session-memory opt-in (`coding-standards`, `sync-prs`); graph-memory opt-in (`fix-bug`, `plan-feature`). Six standing rules (0, 0b, 1, 2, 3, and the meta-principle) in `AGENT-STANDING-RULES.md`. `coding-standards`' domain manifest at version 3, broadened twice so far (database/frontend for TypeORM/Sequelize/Angular/Astro, then backend/frontend again for NestJS/Nuxt), its detection fed by `graphify`'s own build rather than a separate pass. `validate_skill.py` fully passes across all 19.
+
 
