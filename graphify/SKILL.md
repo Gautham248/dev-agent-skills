@@ -194,6 +194,7 @@ NOTABLE_FILES = {
     'schema.prisma', 'schema.zmodel', 'playwright.config.ts', 'playwright.config.js',
     'drizzle.config.ts', 'astro.config.mjs', 'astro.config.ts', 'vite.config.ts',
     'next.config.js', 'next.config.mjs', 'nuxt.config.ts', 'svelte.config.js',
+    'tailwind.config.js', 'tailwind.config.ts', 'tailwind.config.mjs', 'tailwind.config.cjs',
 }
 NOTABLE_DIRS = {
     'components', 'migrations', 'e2e', 'tests', 'prisma', 'drizzle', 'typeorm',

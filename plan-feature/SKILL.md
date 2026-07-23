@@ -107,6 +107,21 @@ Run the four context queries from `references/graph-workflow.md` — related
 functionality, data layer, API/routing layer, UI layer — and read the most
 relevant files from each result before writing anything.
 
+**If any of the four returns results that look thin or unrelated** to what
+the feature actually needs, retry that one query with more literal,
+technical terms — names of existing files, functions, or models likely
+involved — before concluding that layer has nothing relevant. Query
+wording that doesn't share vocabulary with the codebase's actual naming
+can silently return nothing useful without erroring, which looks identical
+to "this doesn't exist yet."
+
+**Confirmed by direct testing: the data-layer query specifically will not
+surface schema content** — the graph has no model/field-level
+representation of schema files (Prisma, or equivalent) at all, only
+whether the project uses one. If the feature touches the data layer, read
+the schema file directly rather than relying on the query to have found
+it.
+
 **Graph-memory:** before relying on these results, check whether anything
 here is already flagged as a known dead end or a correction — see
 `GRAPH-MEMORY-PROTOCOL.md`.

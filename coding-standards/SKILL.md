@@ -110,7 +110,7 @@ fall back to direct detection using each domain's `project_signals`:
 # Kept in sync with path_patterns across all domains as of manifest v3 --
 # if path_patterns gains a new file/dir name, mirror it here too:
 test -f package.json && cat package.json
-find . -maxdepth 3 -iname "schema.zmodel" -o -iname "schema.prisma" -o -iname "playwright.config.*" -o -iname "drizzle.config.*" 2>/dev/null
+find . -maxdepth 3 -iname "schema.zmodel" -o -iname "schema.prisma" -o -iname "playwright.config.*" -o -iname "drizzle.config.*" -o -iname "tailwind.config.*" 2>/dev/null
 find . -maxdepth 3 -type d \( -iname "components" -o -iname "migrations" -o -iname "e2e" -o -iname "prisma" -o -iname "drizzle" -o -iname "typeorm" -o -iname "models" \) 2>/dev/null
 ```
 
@@ -134,6 +134,14 @@ graphify query "<a question grounded in what's actually being asked, same
 as Rule 1's own phrasing -- e.g. 'files and functions relevant to adding an
 endpoint for user preferences'>"
 ```
+
+**If this returns nothing useful or nothing that plausibly relates to the
+task, retry once with more literal terms before treating it as evidence of
+absence** -- e.g. specific identifiers already known from the task, rather
+than only the task's own natural phrasing. A query and the code it's meant
+to find can use genuinely different words for the same thing; a thin result
+doesn't distinguish "this domain doesn't apply" from "the wording didn't
+match," and only the first should feed 3c's fallback.
 
 **3b. Classify what comes back.** For each file/function the query returns,
 check its path against each present domain's `path_patterns` in the manifest
