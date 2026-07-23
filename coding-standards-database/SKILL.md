@@ -39,6 +39,14 @@ Standalone database conventions extracted from this codebase, reusable in any pr
 
 ## 1. Schema Organization
 
+**Confirmed by direct testing: the knowledge graph has no structural
+representation of schema file content** — `graphify query` will not
+surface model or field definitions from a schema file, even a real one
+with real models, since schema DSLs aren't parsed into the graph the way
+application code is. Read the schema file directly whenever its actual
+content matters (field names, types, relations) — don't rely on a graph
+query to have seen it.
+
 - **A single annotated schema file is the source of truth** for models *and* access policies (e.g. `schema.zmodel`; a plain ORM's schema file plays the same role minus policies). All ORM artifacts (client, migration schema, typed query hooks) are generated from it.
 - **Never edit generated schema files.** Change the source model and regenerate; wire the generate step into the build (`build = generate + compile`).
 - **Abstract base models capture shared columns** — every model extends a `Base` with a string cuid `id`, `createdAt`, and `updatedAt` (use your schema DSL's inheritance or composition mechanism):

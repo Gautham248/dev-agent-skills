@@ -88,10 +88,44 @@ the symptom.
 | "wrong URL on homepage" | "URL configuration external links" |
 | "database not connecting" | "Supabase database client connection" |
 | "API returning wrong data" | "API endpoint configuration routes" |
+| "checkout total calculation" (confirmed by testing to fail — the word "checkout" matched only an unrelated e2e test file's name) | "discount price calculation" — wording closer to the code's actual naming, confirmed to find everything relevant |
+
+Confirmed by direct testing, not assumed: query effectiveness depends on
+vocabulary overlap with the code's actual naming, not just topical
+relevance. A thin or seemingly-irrelevant result can mean the code doesn't
+exist yet, or it can mean the wording just didn't match — retry once with
+more literal terms (an error message, a specific identifier, a file or
+function name already known) before concluding the former.
 
 **Too many results:** look at the EDGE lines to find which file is the source
 (not just a consumer). A file that other files import from is likely the
 source of truth.
+
+## Blast-radius checks (`affected`)
+
+```bash
+graphify affected "<function or symbol>" --relation calls --depth 2 --graph <path/to/graph.json>
+```
+
+**Confirmed by testing, not a hypothetical: this under-reports for a common,
+real pattern.** Callers inside an anonymous callback function — the
+standard way Express/Hono/Fastify-style route handlers are written
+(`app.post('/x', async (c) => {...})`) — are invisible to it. Proven by
+rewriting a real handler as a named function and watching it then appear
+correctly on a re-run.
+
+**Cross-check with a plain-text search:**
+
+```bash
+grep -rn "<function or symbol>" --include="*.js" --include="*.ts" --include="*.jsx" --include="*.tsx" . | grep -v node_modules
+```
+
+Compare at the **file** level, not raw line count (one real caller often
+produces 2+ grep lines — an import plus a usage). If `grep` surfaces a file
+`affected` didn't report, that's a real warning sign, not proof — `grep` is
+noisier (string literals, comments, and unrelated identically-named
+identifiers all match too) — but worth naming explicitly in the plan rather
+than silently trusting the lower, tool-reported number.
 
 ## Known file types graphify may misclassify as docs
 

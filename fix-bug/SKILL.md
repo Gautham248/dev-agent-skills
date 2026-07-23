@@ -188,6 +188,12 @@ Parse the output. Every result line follows this format:
 NODE <name> [src=<filepath> loc=L<n> community=<n>]
 ```
 
+**If the results look thin or clearly unrelated to the bug**, retry once
+with more literal, technical terms before concluding nothing relevant
+exists — confirmed by testing to matter; see
+`references/graphify-guide.md`'s "Query strategies" for the exact tested
+example and why.
+
 **Graph-memory:** before relying on these results, check whether anything
 here is already flagged as a known dead end or a correction — see
 `GRAPH-MEMORY-PROTOCOL.md`.
@@ -216,6 +222,12 @@ cat "$REPO_DIR/<target-file-path>"
 
 Read the full file. Understand what it does. Identify the specific line or value
 that contains the bug based on the description.
+
+**If the bug involves database schema structure** (a field, relation, or
+type defined in a schema file), don't rely on Step 4's graph query to have
+surfaced that content — confirmed by testing, the graph has no model/field
+representation of schema files at all. Read the schema file directly here
+if it's relevant to the bug, the same way any other target file is read.
 
 Also read the last 5 commits touching this file (if a git history exists —
 skip this if Step 0 determined there is no git repository here):
@@ -254,6 +266,12 @@ constant/value swap), check its blast radius before finalizing:
 ```bash
 graphify affected "<function or symbol being changed>" --relation calls --depth 2 --graph "$GRAPH_FILE"
 ```
+
+**Confirmed by testing: this can under-report for a common pattern**
+(callers inside anonymous route-handler callbacks) — cross-check with a
+plain-text search and compare at the file level; see
+`references/graphify-guide.md`'s "Blast-radius checks" for the exact
+command and why it matters.
 
 Cheap and fast (well under a second, no LLM) — safe to run every time this
 applies, not something to skip for a fix that seems simple. This is
