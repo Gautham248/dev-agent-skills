@@ -198,11 +198,18 @@ function main() {
   const pathToFinalName = new Map();
   for (const s of imported) {
     pathToFinalName.set(s.relFromSearchRoot, s.finalName);
-    pathToFinalName.set(s.relFromSearchRoot + "/SKILL.md", s.finalName + " skill");
+    // A key that already ends in "/SKILL.md" must resolve to a valid path,
+    // not the "<name> skill" prose form used for the bare-name key above --
+    // this same match also occurs inside markdown link targets
+    // (e.g. "(../foo/SKILL.md)"), where a space and a dropped extension
+    // silently breaks the link. Confirmed by testing: this was a real bug,
+    // not a hypothetical -- a genuine cross-skill markdown link came out as
+    // "(../testext-api-design-review skill)" before this fix.
+    pathToFinalName.set(s.relFromSearchRoot + "/SKILL.md", s.finalName + "/SKILL.md");
     if (args.subdir) {
       const withSubdir = `${args.subdir}/${s.relFromSearchRoot}`;
       pathToFinalName.set(withSubdir, s.finalName);
-      pathToFinalName.set(withSubdir + "/SKILL.md", s.finalName + " skill");
+      pathToFinalName.set(withSubdir + "/SKILL.md", s.finalName + "/SKILL.md");
     }
   }
   // Also include skipped-but-present candidates as "known, not imported"

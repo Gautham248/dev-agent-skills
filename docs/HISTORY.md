@@ -133,8 +133,38 @@ A deliberate, narrow follow-up pass on just `graphify` and `fix-bug`, not a gene
 
 ---
 
+## `coding-standards-tailwind` added — the first domain contributed by someone other than the original author
+
+Adhil added a full new domain (design tokens, theme values, when to use a token vs. an arbitrary value), correctly following the manifest schema without being walked through it — including correctly setting `depends_on: ["frontend"]`, since a styling domain structurally requires a frontend to exist. Bumped the manifest to version 4. This is a distinct kind of event from the earlier manifest broadenings: those added tool names to an *existing* domain's detection list; this added a wholly new domain. Verified the wiring end to end with a real mock project (React + Tailwind), confirming both `frontend` and `tailwind` detect correctly together.
+
+---
+
+## `graphify affected` wired into `fix-bug` for blast-radius checking; `graph-memory` extended to record `coding-standards` guidance corrections
+
+Two related additions. `fix-bug`'s Step 7 now runs `graphify affected` before finalizing a fix that changes an existing function's behavior — feasibility-tested first against a real multi-caller scenario before building, confirmed it correctly found all real callers. Framed strictly as information for the plan, never a reason to expand scope beyond what the bug report describes.
+
+Separately, `graph-memory` was extended so `fix-bug` also records when a `coding-standards` domain's guidance turned out wrong mid-session — answering an open question from earlier about `coding-standards` having no way to observe the outcome of its own dispatch (it doesn't, but `fix-bug`, the skill that dispatches to it, does). Testing this changed the actual design: tagging a `save-result` entry with a domain name instead of a real graph node showed that `useful` outcomes tagged this way produce no visible lesson at all, only a silent count — so the instruction only records corrections and dead ends for domain guidance, never routine successes.
+
+---
+
+## Complex-project testing round — real multi-domain project, four confirmed findings, three closed
+
+Built one deliberately complex test project (`megatest-shop`) touching all 7 `coding-standards` domains at once, rather than testing domains one at a time in isolated mock projects as every earlier round had. This surfaced findings a smaller test couldn't have: `graphify affected` misses callers inside anonymous callback functions entirely (the standard way Express/Hono/Fastify route handlers are written), `graphify`'s stack detection had zero Tailwind file-based awareness, graph queries are vocabulary-sensitive (a query using the task's natural wording can silently return nothing useful if it doesn't share vocabulary with the code's actual naming), and the knowledge graph has zero structural representation of Prisma schema content.
+
+Three of the four got a real fix in the same round: Tailwind config file names added to `graphify`'s `NOTABLE_FILES` (a full fix, verified against both a config-file project and a pure-CSS-only Tailwind v4 project with no config file at all, to confirm the primary dependency-based path still covers that case); a retry-with-more-literal-terms instruction added to `fix-bug`, `plan-feature`, and `coding-standards`' query steps; and explicit instructions to read schema files directly added to `plan-feature`, `fix-bug`, and `coding-standards-database`, since the graph is confirmed blind to schema content. The `affected` anonymous-callback gap got a mitigation, not a full fix — a `grep`-based cross-check compared at the file level (not raw line count, which testing showed was misleading, since one real caller produces multiple grep matches). The actual defect lives inside `graphify`'s own call-graph extraction, a third-party package, out of scope for a direct patch here.
+
+---
+
+## Priority 3 audit — `typescript-conventions`, `webapp-conventions`, `skill-factory`, `skill-add`, `skill-update`, `eslint-rule-author`
+
+The remaining unaudited skills, tested with the same rigor as every skill before them, not a lighter pass. Found and fixed one real bug: `skill-add`'s cross-reference rewriting (shared with `skill-update`, since both use the same underlying script) broke markdown links pointing at another imported skill. Built a real fake external skillset with a genuine cross-reference between two skills and ran the actual installer against it — the link came out with a broken path (a space, no `.md` extension) instead of a valid one. Root cause: the rewriter's replacement value for any path ending in `/SKILL.md` was always the informal "prose" form meant for plain-text mentions, even when the same text appeared inside a markdown link target. Fixed with a minimal, targeted change; re-verified against the same real scenario on an independent clone, and confirmed the fix carries through `skill-update`'s refresh flow too, since it reuses the same script.
+
+Everything else tested came back genuinely working: `skill-factory`'s `scaffold_skill.py` against all 4 documented behaviors; `eslint-rule-author`'s bundled worked example and its Vitest-compatibility bridge, tested by actually installing the real `@typescript-eslint` toolchain and running the tests for real, not just reading the code. One non-bug worth a team decision, not a fix: `webapp-conventions` is explicitly scoped to SvelteKit, while every test project used throughout this whole project has been React-based — worth confirming this is still accurate to what the team actually builds.
+
+---
+
 ## Current state snapshot (at time of writing)
 
-19 skills at the repo root: `coding-standards` + its 6 domain sub-skills, `eslint-rule-author`, `first-principles-review`, `fix-bug`, `graphify`, `investigate-issue`, `plan-feature`, `skill-add`, `skill-factory`, `skill-update`, `sync-prs`, `typescript-conventions`, `webapp-conventions`. Four managed protocols: clarification and self-improvement unconditional; session-memory opt-in (`coding-standards`, `sync-prs`); graph-memory opt-in (`fix-bug`, `plan-feature`). Six standing rules (0, 0b, 1, 2, 3, and the meta-principle) in `AGENT-STANDING-RULES.md`. `coding-standards`' domain manifest at version 3, broadened twice so far (database/frontend for TypeORM/Sequelize/Angular/Astro, then backend/frontend again for NestJS/Nuxt), its detection fed by `graphify`'s own build rather than a separate pass. `validate_skill.py` fully passes across all 19.
+20 skills at the repo root: `coding-standards` + its 7 domain sub-skills (including `coding-standards-tailwind`), `eslint-rule-author`, `first-principles-review`, `fix-bug`, `graphify`, `investigate-issue`, `plan-feature`, `skill-add`, `skill-factory`, `skill-update`, `sync-prs`, `typescript-conventions`, `webapp-conventions`. Four managed protocols: clarification and self-improvement unconditional; session-memory opt-in (`coding-standards`, `sync-prs`); graph-memory opt-in (`fix-bug`, `plan-feature`). Six standing rules (0, 0b, 1, 2, 3, and the meta-principle) in `AGENT-STANDING-RULES.md`. `coding-standards`' domain manifest at version 4, broadened three times (database/frontend for TypeORM/Sequelize/Angular/Astro; backend/frontend for NestJS/Nuxt; a wholly new domain, Tailwind, added rather than an existing one broadened), its detection fed by `graphify`'s own build rather than a separate pass. `fix-bug` additionally checks blast radius via `graphify affected` before finalizing a fix. `validate_skill.py` fully passes across all 20.
 
 
