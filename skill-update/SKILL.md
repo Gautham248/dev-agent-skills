@@ -3,7 +3,7 @@ name: skill-update
 description: >
   Use when the user wants to update, refresh, sync, or pull the latest version
   of one or all tracked external skills — phrases like "update my skills",
-  "sync skillsets", "pull the latest version of <skillset>", "refresh my
+  "sync skillsets", "pull the latest version of the superpowers skillset", "refresh my
   external skills", or "check for skillset updates". Reads .skillsets.json to
   find every tracked external import, re-clones each source at the latest
   commit, compares content, and refreshes any that changed. Never adds skills

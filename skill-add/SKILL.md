@@ -2,8 +2,8 @@
 name: skill-add
 description: >
   Use when the user wants to add, import, or install a new external skill from
-  a git repository — phrases like "add skill", "install a skill from <url>",
-  "import this skillset", or "pull in <git-repo> as a skill". Clones the remote
+  a git repository — phrases like "add skill", "install a skill from this URL",
+  "import this skillset", or "pull in that repo as a skill". Clones the remote
   git repo, flattens its skills into the dev-agent-skills repo root (one folder
   per skill), rewrites cross-skill references, records provenance in
   .skillsets.json, and runs setup.sh to symlink and inject protocols. Never

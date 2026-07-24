@@ -4,6 +4,7 @@ graphify-out/
 # Local artifact from `graphify install --platform opencode`
 # setup.sh handles global config; these are machine-specific
 .opencode/
+dev-docs/
 
 # Python
 __pycache__/

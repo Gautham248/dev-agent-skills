@@ -8,11 +8,15 @@ This file is also mirrored, in fuller form, as Rule 3 of `AGENT-STANDING-RULES.m
 
 If you find yourself reasoning about whether this protocol "really applies" to the current request because it seems too simple or too obvious — that reasoning is itself the failure mode this protocol exists to prevent. There is no simplicity exemption.
 
+This protocol exists because the developer on the other end of this conversation is not always going to describe what they want clearly, completely, or in the right technical vocabulary — sometimes it's 2 AM and they're typing one line from a phone. Design for that person, not for the person who already hands you a perfect spec. Getting the request right before acting is the whole point of every step below.
+
 ## Step 1 — Decide if you actually have enough to act
 
 You have enough if you can state, in one or two sentences: what's actually broken or wanted (observed behavior, or the desired outcome), and what the result should look like instead.
 
 A specific, concrete detail is enough on its own — an exact value, an exact error message, an exact before/after, an exact name. You do **not** need to know which file or where in the codebase something lives before proceeding — that's what you're for. Never ask the user to do your own investigation for you.
+
+Before treating anything as unknown, check what's already visible first — earlier messages in this thread, a linked issue, output you've already produced. Don't ask about something already answered or already inferable from what you have.
 
 **Anti-pattern:** Asking the user to specify a file path, line number, or other technical detail when they've already given a concrete, identifying value. Resolving that is your job.
 
@@ -20,15 +24,24 @@ If the request is too vague to act on (e.g. "fix the bug," "the link is wrong," 
 
 ## Step 2 — Investigate before you ask
 
-You have real filesystem access — use it, and use any knowledge graph already built for this project, before asking the user anything you could find out yourself. Then ask your question grounded in what you actually found: "I see two places that reference X — is it the one in `<file>`, or the other one?" is a much better question than "which file is this in?"
+You have real filesystem access — use it, and use any knowledge graph already built for this project, before asking the user anything you could find out yourself. If a graph exists at `graphify-out/graph.json`, don't treat its mere existence as proof it's current — a graph built several commits ago and never refreshed can point you at code that no longer exists. A quick `graphify check-update .` (and `graphify update .` if that reports pending changes) costs nothing and keeps whatever you're about to investigate grounded in the actual current code. Then ask your question grounded in what you actually found: "I see two places that reference X — is it the one in `<file>`, or the other one?" is a much better question than "which file is this in?"
 
 Ask exactly one focused question at a time.
+
+### How to ask well
+
+- **Prefer a closed question over an open one whenever the space of likely answers is small.** "Should this retry once, or stop and report it?" gets answered faster and more reliably than "what should happen on failure?" — and it's easier for someone to correct a wrong guess than to compose an answer from nothing.
+- **Never accept a vague answer as final.** "Whatever's fine," "you decide," "I don't know," or anything that doesn't actually commit to a specific outcome is not an answer — it's a signal to propose one yourself. State a concrete default plainly and turn it into a yes/no: "I'll have it stop and report the error rather than retry — sound right?" Don't proceed until you get an actual reaction to it, not just silence.
+- **If more than a couple of things are still unclear after a few exchanges, recap before continuing.** Restate what's been established so far in one or two plain sentences, then ask the next thing. Catching a misread here costs one message; catching it after you've already acted costs a redo.
+- **If the request seems to bundle two unrelated changes, say so.** Ask whether to handle them separately rather than silently picking one and dropping the other, or silently merging them into a single change neither was meant to be part of.
 
 **Anti-pattern:** Asking something you've already asked, even reworded. If you notice you're about to repeat yourself, that itself means you already have enough to proceed — say so instead of asking again.
 
 **Anti-pattern:** Continuing to ask indefinitely. If after 3–4 exchanges you still don't have a fully concrete answer, stop asking — move to Step 3 with your best understanding, clearly flagged as uncertain where it is.
 
 **Anti-pattern:** Treating an explicit "just go ahead," "that's enough," or "proceed" as one more thing to weigh, rather than as an instruction to stop asking immediately and move to Step 3.
+
+**Anti-pattern:** Treating a knowledge graph's mere existence as proof it's current. Check before relying on what it tells you — a stale graph can point you at code that no longer exists, which produces a clarifying question grounded in the wrong reality.
 
 ## Step 3 — Present a plan and STOP. Do not act yet
 
@@ -39,6 +52,10 @@ Once you have enough clarity, do not start editing, committing, or running git/G
 - **What "done" looks like** (concrete and checkable)
 
 Then explicitly ask the user to confirm before you proceed — something like "Want me to go ahead with this?" This is a hard stop, not a formality.
+
+### What counts as confirmation
+
+A reply only counts if it responds to the substance of the plan. "Yes," "looks right," "go ahead," "correct," or a specific correction that you then re-confirm all count. A reply that changes the subject, doesn't address the plan at all, or arrives as a suspiciously fast "sure" right after a long or complex plan does **not** count on its own — for that last case specifically, a quick double-check ("just to be sure — anything here you'd want changed?") is worth the extra message before treating it as a real yes.
 
 **Anti-pattern:** Presenting the plan and then proceeding within the same turn without waiting for the user's actual reply. The stop must be real.
 

@@ -30,6 +30,41 @@ Do not wait for permission to create this file — the standing rules demand it.
 
 ---
 
+## Rule 0b — Offer to gitignore local tooling artifacts
+
+Immediately after Rule 0, before Rule 1: check whether this project's
+`.gitignore` already lists `graphify-out/`:
+
+```bash
+test -f .gitignore && grep -q "graphify-out" .gitignore && echo "ALREADY_IGNORED" || echo "NOT_IGNORED"
+```
+
+**If it prints `NOT_IGNORED`:** ask once, as a single closed question: "This
+project doesn't gitignore `graphify-out/` yet (the local knowledge graph and
+its build artifacts) — want me to add it?" Add the entry only after an
+explicit yes. If `.gitignore` doesn't exist yet, create it with just that
+entry after the same yes.
+
+**If it prints `ALREADY_IGNORED`:** proceed to Rule 1, say nothing.
+
+**If the answer is no:** proceed to Rule 1. Do not ask again for the rest of
+this session — a "no" is a real answer, not something to retry.
+
+### Anti-patterns — explicitly forbidden for Rule 0b
+
+- Adding the `.gitignore` entry without asking first, even though it's a
+  smaller mutation than a commit — it is still an unrequested edit to a file
+  in what may be a client's repository, and this project already treats that
+  category of action (see `fix-bug`'s commit/push behavior) as requiring
+  explicit opt-in, not silent action.
+- Asking again in the same session after a "no." One answer covers the whole
+  session.
+- Treating this as a reason to delay or skip Rule 1 — this check and its
+  question, if any, happen quickly and then Rule 1 proceeds regardless of
+  the answer.
+
+---
+
 ## Rule 1 — Prepare the project's knowledge graph before investigating any other way
 
 Before doing anything else in response to a request that isn't already fully concrete — before grepping, before globbing, before spawning a task/subagent to explore, before asking the user anything — run this exact command first:
@@ -38,11 +73,37 @@ Before doing anything else in response to a request that isn't already fully con
 test -f graphify-out/graph.json && echo "GRAPH EXISTS" || echo "NO GRAPH YET"
 ```
 
-**If it prints `GRAPH EXISTS`:** query it directly, right now, before doing anything else:
+**If it prints `GRAPH EXISTS`:** before querying, confirm it's actually current — existence alone doesn't mean it reflects the latest commit:
+
+```bash
+graphify check-update .
+```
+
+If that reports pending changes, refresh it first (AST-only, no API cost, no LLM call):
+
+```bash
+graphify update .
+```
+
+Then query it:
 
 ```bash
 graphify query "<a question grounded in what's actually being asked>"
 ```
+
+Also confirm the graph is set up to stay fresh on its own, so this check matters less over time:
+
+```bash
+graphify hook status
+```
+
+If it reports the hook isn't installed:
+
+```bash
+graphify hook install
+```
+
+This installs post-commit and post-checkout hooks that rebuild the AST-derived part of the graph automatically — no API cost, no agent involvement required — plus a git merge driver so `graph.json` never ends up with conflict markers when two people commit in parallel. Doc/PDF/image content still needs a real pass through the `graphify` skill (that part needs a model, which a bare git hook doesn't have) — `check-update`/`update` above is what catches staleness in that gap.
 
 **If it prints `NO GRAPH YET`:** invoke the `graphify` skill using the same skill-loading tool/mechanism you use for any other skill (`fix-bug`, `plan-feature`, etc.) — by skill name, not as a shell command and not as literal chat text. The `graphify` skill is a complete, multi-step pipeline (interpreter detection, file detection, structural extraction, and — if needed — dispatching its own subagents for any docs/images). Your only job is to invoke it; the skill's own instructions guide everything after that.
 
@@ -57,6 +118,7 @@ This step is about investigation, not about deciding what kind of task this is �
 - Loading the `graphify` skill and then skipping or abbreviating its own internal steps because they seem slow, redundant, or unnecessary for this particular request. Follow its documented sequence in full. If a step genuinely cannot complete, follow *its own* documented fallback and say so — never preemptively skip ahead on your own judgment.
 - Treating a generic "let me explore the codebase" action — grep, glob, or spawning an Explore/Task subagent — as a substitute for this rule. Exploration is not graph preparation, and doing one does not satisfy the other.
 - Assuming you already know the graph's state from earlier in the same session and skipping the check. Run the literal command for real, every time you start investigating a new request.
+- Treating `graphify-out/graph.json`'s mere existence as proof it's current. A graph built three commits ago and never refreshed is stale — `check-update` is what actually confirms freshness, not the existence check alone.
 
 ---
 
@@ -78,9 +140,13 @@ Once Rule 1 is complete, if the request sounds like it could be a bug report, fe
 
 This rule governs everything from the moment a matching skill (or no skill, if none applied) has been engaged, up until you are about to make any real change. It has four steps. Follow them in order — do not skip ahead to Step 4 without genuinely completing Steps 1–3.
 
+This rule exists because the developer on the other end is not always going to describe what they want clearly, completely, or in the right technical vocabulary — sometimes it's 2 AM and they're typing one line from a phone. Design for that person, not for the person who already hands you a perfect spec.
+
 ### Step 1 — Decide if you actually have enough to act
 
 You have enough if you can state, in one or two sentences, what's actually broken or wanted, and what the result should look like instead. A specific, concrete detail — an exact value, an exact error message, an exact before/after, an exact name — is enough on its own. You do not need to know which file or where in the codebase something lives before proceeding; finding that out is your job, never the user's.
+
+Before treating anything as unknown, check what's already visible first — earlier messages in this thread, a linked issue, output you've already produced. Don't ask about something already answered or already inferable from what you have.
 
 **Anti-pattern:** Asking the user to specify a file path, line number, or other technical/internal detail when they've already given a concrete, identifying value. That is your job to resolve using Rule 1's graph and your own tools — asking the user to do it for you is forbidden.
 
@@ -89,6 +155,13 @@ You have enough if you can state, in one or two sentences, what's actually broke
 If the request is too vague per Step 1, investigate using tools you already have — including Rule 1's graph — before asking the user anything you could find out yourself. Ground your question in what you actually found: naming real candidates is always better than asking generically.
 
 Ask exactly one focused question at a time.
+
+**How to ask well:**
+
+- **Prefer a closed question over an open one whenever the space of likely answers is small.** "Should this retry once, or stop and report it?" gets answered faster and more reliably than "what should happen on failure?" — and it's easier for someone to correct a wrong guess than to compose an answer from nothing.
+- **Never accept a vague answer as final.** "Whatever's fine," "you decide," "I don't know," or anything that doesn't actually commit to a specific outcome is not an answer — it's a signal to propose one yourself. State a concrete default plainly and turn it into a yes/no: "I'll have it stop and report the error rather than retry — sound right?" Don't proceed until you get an actual reaction to it, not just silence.
+- **If more than a couple of things are still unclear after a few exchanges, recap before continuing.** Restate what's been established so far in one or two plain sentences, then ask the next thing. Catching a misread here costs one message; catching it after you've already acted costs a redo.
+- **If the request seems to bundle two unrelated changes, say so.** Ask whether to handle them separately rather than silently picking one and dropping the other, or silently merging them into a single change neither was meant to be part of.
 
 **Anti-pattern:** Asking a question you've already asked, even if reworded. If you notice you're about to repeat yourself, that itself means you already have enough information to move to Step 3 — say so instead of asking again.
 
@@ -105,6 +178,8 @@ Once you have enough clarity (from Step 1 directly, or after Step 2), do not edi
 - **What "done" looks like** — concrete and checkable.
 
 Then explicitly ask the user to confirm — "Want me to go ahead with this?" or equivalent.
+
+**What counts as confirmation:** a reply only counts if it responds to the substance of the plan. "Yes," "looks right," "go ahead," "correct," or a specific correction that you then re-confirm all count. A reply that changes the subject, doesn't address the plan at all, or arrives as a suspiciously fast "sure" right after a long or complex plan does not count on its own — for that last case specifically, a quick double-check ("just to be sure — anything here you'd want changed?") is worth the extra message before treating it as a real yes.
 
 **Anti-pattern:** Presenting a plan and then proceeding to act within the same turn, without waiting for the user's actual next message. A rhetorical question followed immediately by action is not a confirmation step — there must be a genuine stop, with nothing happening until a real reply arrives.
 

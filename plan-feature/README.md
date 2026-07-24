@@ -1,47 +1,52 @@
 # plan-feature
 
-An Agent Skill that produces a structured implementation plan for a new feature,
-grounded in the actual codebase via Graphify knowledge graph queries.
+An Agent Skill that turns "we should build X" into a structured, codebase-aware implementation plan — before anyone writes code.
 
-The agent reads the repo, understands the existing architecture, and writes a
-plan that names real files and real modules. No code is written.
+Point your coding agent at this skill and say *"plan this feature"* or *"write a feature plan for X"*. It will:
 
-## Who it's for
+- **Query the repository's knowledge graph** (via `graphify`) to understand the existing codebase — related functionality, the data layer, the API/routing layer, the UI layer — before proposing anything.
+- **Produce a structured markdown plan** covering what to build, where it fits, what to change, and what to watch out for.
+- **Verify every file path it names** against the real repository using a bundled script, before the plan is ever saved — a plan referencing a file that doesn't exist, or mislabeling an existing file as "to create," fails this check and gets fixed before saving, not after.
+- **Save the plan** as a new GitHub issue (default), a comment on an existing issue, or a file committed to the repo — the mode is explicit, never guessed.
 
-Developers who want a codebase-aware starting point before implementing a
-feature — not a generic spec, but a plan that knows where things actually live.
+## What it is (and isn't)
+
+This is a **skill** — a `SKILL.md` of step-by-step guidance plus a bundled `verify_plan_paths.py` script. It does **not** write code. Its entire output is a plan for a human (or another skill) to act on next.
+
+Other skills can invoke this one directly rather than going through its own interview — see the "invoked by another skill" input contract in `SKILL.md` if you're calling it from a skill you're authoring. `investigate-issue` does exactly this for the feature-request branch of its own decision tree.
 
 ## Prerequisites
 
-- `graphify` — `pip install graphifyy`
-- `gh` CLI authenticated — `gh auth login`
-- `GEMINI_API_KEY` (free at aistudio.google.com)
+- `graphify` on `PATH`
+- [`gh`](https://cli.github.com/), authenticated (`gh auth login`)
+- `git`, and network access to GitHub
+- `python3` for the bundled path-verification script
 
 ## Install
 
-**Portable (recommended):**
+Follows the open [Agent Skills](https://agentskills.io) layout. Drop the
+`plan-feature/` folder into your agent's skills directory.
+
+**Portable (recommended for repos shared across agents):**
 
 ```bash
 mkdir -p .agents/skills
 cp -R plan-feature .agents/skills/
 ```
 
-**Per-agent paths:**
+Within this repo specifically: run `bash setup.sh` from the repo root — it handles this automatically for every detected harness.
 
-| Agent | Personal | Project |
-|---|---|---|
-| Claude Code | `~/.claude/skills/plan-feature/` | `.claude/skills/plan-feature/` |
-| Cursor | native global path | `.agents/skills/plan-feature/` |
-| Hermes | `~/.hermes/skills/plan-feature/` | external_dirs in config.yaml |
-| Codex | `~/.codex/skills/plan-feature/` | `.agents/skills/plan-feature/` |
-| Gemini CLI | installer-managed | `.agents/skills/plan-feature/` |
+## Usage examples
 
-Or run `bash setup.sh` from the repo root.
+```
+Plan this feature: let users export their data as CSV.
+```
 
-## Usage
+```
+Write a feature plan for adding rate limiting to the public API.
+Save it as a comment on issue #58.
+```
 
-> Plan the feature to add article tagging in owner/repo
-
-> Write an implementation plan for adding OAuth login to acme-org/backend
-
-> How should we implement search in our docs site?
+```
+How should we implement real-time notifications? Create a spec for it.
+```

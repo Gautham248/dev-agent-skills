@@ -13,7 +13,7 @@ A skill is a folder at the repo root containing a `SKILL.md`. Everything else is
 ```
 your-skill-name/           ← kebab-case. this becomes the slash-command name.
 ├── SKILL.md               ← required. the agent reads this.
-├── README.md              ← required. humans read this.
+├── README.md              ← recommended, not required (see note below). humans read this.
 ├── references/            ← optional. deep-dive docs the agent can be directed to.
 │   ├── edge-cases.md      ← append-only log of real edge cases (auto-managed)
 │   └── guide.md           ← anything else the skill might need
@@ -70,7 +70,7 @@ description: >
 
 ### What setup.sh adds automatically
 
-After you create a new skill and run `bash setup.sh`, two managed blocks are inserted immediately after the frontmatter's closing `---`:
+After you create a new skill and run `bash setup.sh`, two managed blocks are inserted immediately after the frontmatter's closing `---`, unconditionally, in every skill:
 
 ```
 <!-- BEGIN dev-agent-skills clarification protocol ... -->
@@ -85,9 +85,55 @@ While using this skill, and especially when you finish, read and follow the self
 <!-- END dev-agent-skills self-improvement protocol -->
 ```
 
-**Do not edit these blocks manually.** They are regenerated on every `setup.sh` run, so any manual edits will be overwritten. If you need to modify what the protocols say, edit `CLARIFICATION-PROTOCOL.md` or `SELF-IMPROVEMENT-PROTOCOL.md` in the `config/` directory — those changes will propagate to every skill on the next `setup.sh` run.
+Two more blocks are added *conditionally*, each independently, only if your skill's frontmatter sets the matching flag:
+
+```
+<!-- BEGIN dev-agent-skills session-memory protocol ... -->
+This skill opted in to session-memory (session-memory: true). Whenever you reach a step
+marked 'Session-reusable:' below, read and follow the session-memory protocol at:
+../config/SESSION-MEMORY-PROTOCOL.md
+<!-- END dev-agent-skills session-memory protocol -->
+
+<!-- BEGIN dev-agent-skills graph-memory protocol ... -->
+This skill opted in to graph-memory (graph-memory: true). At each point marked
+'Graph-memory:' below, read and follow the graph-memory protocol at:
+../config/GRAPH-MEMORY-PROTOCOL.md
+<!-- END dev-agent-skills graph-memory protocol -->
+```
+
+See "Opting into session-memory" and "Opting into graph-memory" below for whether your skill should set either flag — they're independent, a skill can have neither, either, or both.
+
+**Do not edit any of these blocks manually.** They are regenerated on every `setup.sh` run, so any manual edits will be overwritten. If you need to modify what a protocol says, edit `CLARIFICATION-PROTOCOL.md`, `SELF-IMPROVEMENT-PROTOCOL.md`, `SESSION-MEMORY-PROTOCOL.md`, or `GRAPH-MEMORY-PROTOCOL.md` in the `config/` directory — those changes will propagate to every skill (or every opted-in skill, for the two conditional protocols) on the next `setup.sh` run.
 
 Your skill's own instructions go below these blocks, unchanged.
+
+### Opting into session-memory
+
+Most skills don't need this — it's for the specific case where a skill has a step that's pure fact-gathering, plausibly gets reached more than once within one session, and whose answer essentially can't be invalidated by anything else done in that same session. `coding-standards`' project-domain detection and `sync-prs`' "identify the running user" step are the two current examples. A knowledge-graph check is the canonical *non*-example — it fails the third condition, since most skills that use one exist to change the code that graph describes.
+
+If your skill has a step like this:
+
+1. Add `session-memory: true` to your skill's frontmatter.
+2. Mark the specific step (not the whole skill) with a `**Session-reusable:**` lead-in at the start of its instructions, briefly stating what would invalidate reuse for this specific check — see `coding-standards/SKILL.md`'s Step 2 or `sync-prs/SKILL.md`'s Step 1 for real examples of the wording.
+3. Run `bash setup.sh` — this injects the protocol block into your skill automatically.
+
+The flag and the marker only mean something together — `validate_skill.py` will warn you if you set the flag without marking any step, or mark a step without setting the flag (see [`06-REFERENCE.md`](./06-REFERENCE.md) for the full validator check list).
+
+Full mechanism details, including exactly what "reuse" means and how it must be communicated in the agent's output, live in `config/SESSION-MEMORY-PROTOCOL.md`.
+
+### Opting into graph-memory
+
+A different, narrower case from session-memory above — this one only fits a skill that genuinely queries the knowledge graph to understand code, then later knows a real outcome. Two required ingredients: a point where the skill relies on graph query results, and a later point where the skill knows whether that reliance actually paid off. `fix-bug` (query in Step 4, outcome known in Step 12) and `plan-feature` (query in Step 4, outcome known in Step 7) both have this shape naturally. `coding-standards` was considered and deliberately left out — it dispatches to another skill and never receives a completion signal back, so it has no honest point to record an outcome from.
+
+If your skill has both a query point and a real outcome point:
+
+1. Add `graph-memory: true` to your skill's frontmatter.
+2. Mark **both** points with a `**Graph-memory:**` lead-in — one at the point you're about to rely on query results (check `graphify reflect`'s output first), one at the point the real outcome is known (call `save-result` honestly). See `fix-bug/SKILL.md`'s Step 4 and Step 12, or `plan-feature/SKILL.md`'s Step 4 and Step 7, for real examples of the wording.
+3. Run `bash setup.sh` — this injects the protocol block into your skill automatically.
+
+Same consistency rule as session-memory: the flag and at least one marker only mean something together — `validate_skill.py` warns on either one without the other.
+
+Full mechanism details — including the tested, documented limitation that a renamed or deleted node's signal silently disappears from consideration rather than showing stale — live in `config/GRAPH-MEMORY-PROTOCOL.md`.
 
 ### TypeScript helper scripts
 
@@ -101,7 +147,7 @@ Reference this exact invocation in your `SKILL.md` instructions so the agent kno
 
 ### Writing README.md
 
-The `README.md` is for humans browsing the repo, not for the agent. Cover:
+The `README.md` is for humans browsing the repo, not for the agent — recommended for every skill, but no longer strictly enforced (`validate_skill.py` warns if it's missing rather than rejecting the skill; this changed after the check turned out to contradict this very guide, which has always asked for one). Cover:
 
 - What the skill does (2–3 sentences, outcome-focused)
 - Who it's for (which developers, which situations)
@@ -125,6 +171,9 @@ bash setup.sh
 grep -c "BEGIN dev-agent-skills clarification protocol" your-skill-name/SKILL.md
 # should print 1
 
+# 4b. Or run the full validator, which checks this and more
+python3 skill-factory/scripts/validate_skill.py your-skill-name
+
 # 5. Commit and push
 git add your-skill-name/
 git commit -m "add: your-skill-name"
@@ -136,7 +185,60 @@ git push
 
 ---
 
-## Part 2: Importing an external skillset
+## Part 1b: Writing a master/dispatcher skill
+
+Most skills are self-contained — one `SKILL.md`, applied directly. `coding-standards` is a different shape: it's a **dispatcher** that investigates the current project and hands off to whichever of several domain-specific sub-skills actually apply, instead of containing the standards itself. This section covers when and how to build one, using `coding-standards` as the worked example throughout.
+
+### When this pattern fits
+
+Reach for a dispatcher when a single conceptual skill would otherwise need an internal routing table over multiple large, mostly-unrelated bodies of instructions — the sign that a plain skill is straining under this is a `SKILL.md` (or its reference files) trying to cover several genuinely separate concerns (frontend conventions, backend conventions, database conventions, ...) where a task rarely needs all of them at once, and where whether a given concern even applies depends on the specific project, not just the task.
+
+If your skill is one coherent workflow, even a long one, it almost certainly doesn't need this — write a plain skill per the section above instead.
+
+### The pieces
+
+```
+your-dispatcher/
+├── SKILL.md                     ← the dispatcher: investigates, matches, hands off
+└── references/
+    ├── manifest.json            ← domain → skill + detection signals, dispatcher-only
+    └── edge-cases.md
+
+your-dispatcher-<domain-a>/      ← real, independent skills, not reference files
+your-dispatcher-<domain-b>/
+```
+
+**The manifest** (`references/manifest.json`) is the single source of truth for what domains exist, which skill handles each, and how to detect whether a project has that domain and whether a task touches it. Real example, one entry from `coding-standards/references/manifest.json`:
+
+```json
+{
+  "domain": "database",
+  "skill": "coding-standards-database",
+  "task_signals": ["a schema change, migration, or database query", "..."],
+  "project_signals": ["a schema.zmodel, schema.prisma, or migrations/ file", "..."],
+  "path_patterns": ["schema.prisma", "schema.zmodel", "migrations/", "prisma/"],
+  "depends_on": []
+}
+```
+
+- `task_signals` — what kind of request implies this domain, in plain language, for matching against task wording as a fallback.
+- `project_signals` — human-readable prose, used only by the fallback path (direct detection commands) if `graphify`'s stack file is somehow missing.
+- `path_patterns` — matched against two different things depending on context: a knowledge-graph query's returned file paths (task-to-domain matching), or `graphify-out/.graphify_stack.json`'s `notable_files`/`notable_dirs` (project detection).
+- `dependency_patterns` — npm package name substrings, matched against `.graphify_stack.json`'s `dependencies` list. This is what project detection checks first now — see below.
+- `depends_on` — other domains this one structurally requires (e.g. a client-side query library needs a frontend to exist at all) — lets the dispatcher surface a specific architectural mismatch instead of a generic "not installed" question.
+
+**Critically: no sub-skill references the manifest.** Only the dispatcher's own `SKILL.md` is told it exists. This is what makes it function as dispatcher-only without needing any harness-level permission configuration — a sub-skill genuinely can't discover a file nothing tells it exists.
+
+### The dispatcher's own logic, in order
+
+1. Apply anything that's universal across all domains directly and unconditionally — no dispatch decision needed for these.
+2. Investigate the project against each domain's `dependency_patterns` and `path_patterns` by reading `graphify-out/.graphify_stack.json` — written by `graphify` itself as a normal part of building the knowledge graph (see `graphify/SKILL.md`'s Step 2.6), not by running independent detection commands. This is what lets project detection inherit the graph's own staleness handling instead of needing a separate cache. Only falls back to direct `package.json`/`find` commands, matched against `project_signals`, if that file is somehow missing. Nothing here is worth caching *within* a session beyond what's already covered — unless the specific reading step has also been marked `Session-reusable:` (see "Opting into session-memory" above — `coding-standards` does this for exactly this step).
+3. Match the task against domains — prefer grounding this in an actual knowledge-graph query classified via `path_patterns` over matching on task wording alone; fall back to wording only when the graph has nothing to return.
+4. A domain that's matched but not present in the project is a signal to ask, not to silently apply or silently skip — same for a domain whose `depends_on` isn't satisfied.
+5. Dispatch to each matched, present, unambiguous domain's skill via the skill-loading tool, by name — passing along what's already been established (which domains are present, what the task is) so the dispatched skill doesn't have to re-investigate from scratch.
+6. If genuinely ambiguous between two or more present candidates, ask exactly one closed question grounded in specific evidence — never a generic "which areas does this touch?"
+
+Full worked reasoning behind each of these decisions — including what was tried and rejected (a persistent per-project cache, most notably) — is in [`HISTORY.md`](./HISTORY.md).
 
 The `skill-add` skill pulls an external skill repository into this one as a managed, tracked import. The key principle: **the team lead reviews and installs once; teammates just pull and run setup.sh.** This is why import goes through the central repo rather than everyone installing individually.
 

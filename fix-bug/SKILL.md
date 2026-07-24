@@ -3,13 +3,16 @@ name: fix-bug
 description: >
   Use when a developer reports a bug in a GitHub repository and wants an
   automated fix — phrases like "fix this bug", "there's an error in production",
-  "something is broken in <repo>", or "open a PR to fix <issue>". Also use for
+  "something is broken in the payments repo", or "open a PR to fix issue 42". Also use for
   the same kind of bug report in a local, not-yet-GitHub-connected repository —
   the clarification and investigation steps still apply; only the clone/PR
   mechanics differ (see Step 0). Queries the repository's knowledge graph to
-  find the relevant file, applies a minimal targeted fix, commits it on a new
-  branch, opens a pull request, and notifies the developer. Never merges.
-  Never deletes files. Never touches more than what the bug report describes.
+  find the relevant file and applies a minimal targeted fix. Only commits,
+  pushes, and opens a pull request when the developer explicitly asks — by
+  default it stops at the edited file for the developer to review. Never
+  merges. Never deletes files. Never touches more than what the bug report
+  describes.
+graph-memory: true
 ---
 
 <!-- BEGIN dev-agent-skills clarification protocol (managed by setup.sh -- do not edit this block manually; edit CLARIFICATION-PROTOCOL.md instead) -->
@@ -22,6 +25,12 @@ While using this skill, and especially when you finish, read and follow the self
 ../config/SELF-IMPROVEMENT-PROTOCOL.md
 (Append real edge cases to this skill's own references/edge-cases.md — create it if missing. See the protocol file for what qualifies.)
 <!-- END dev-agent-skills self-improvement protocol -->
+
+<!-- BEGIN dev-agent-skills graph-memory protocol (managed by setup.sh -- do not edit this block manually; edit GRAPH-MEMORY-PROTOCOL.md instead) -->
+This skill opted in to graph-memory (graph-memory: true). At each point marked
+'Graph-memory:' below, read and follow the graph-memory protocol at:
+../config/GRAPH-MEMORY-PROTOCOL.md
+<!-- END dev-agent-skills graph-memory protocol -->
 
 # Fix bug
 
@@ -78,6 +87,11 @@ Ask the developer for:
 3. **Environment** — production / staging / local
 4. **Reviewer** — GitHub username to assign on the PR (default: the reporter) —
    only applicable if a PR will actually be opened (see Step 0)
+5. **Commit & push preference** — after the fix is applied, should the agent
+   commit and push it (and open a PR), or stop at the edited file for the
+   developer to review and handle git themselves? **Default: do NOT commit or
+   push.** Ask this explicitly and wait for an answer — never commit or push
+   on your own initiative just because the fix is ready.
 
 Do not proceed without the bug description.
 
@@ -174,6 +188,16 @@ Parse the output. Every result line follows this format:
 NODE <name> [src=<filepath> loc=L<n> community=<n>]
 ```
 
+**If the results look thin or clearly unrelated to the bug**, retry once
+with more literal, technical terms before concluding nothing relevant
+exists — confirmed by testing to matter; see
+`references/graphify-guide.md`'s "Query strategies" for the exact tested
+example and why.
+
+**Graph-memory:** before relying on these results, check whether anything
+here is already flagged as a known dead end or a correction — see
+`GRAPH-MEMORY-PROTOCOL.md`.
+
 Extract every unique `src=` value. Count how many NODE lines reference each
 file — more references means higher relevance to the query. Sort by count
 descending.
@@ -198,6 +222,12 @@ cat "$REPO_DIR/<target-file-path>"
 
 Read the full file. Understand what it does. Identify the specific line or value
 that contains the bug based on the description.
+
+**If the bug involves database schema structure** (a field, relation, or
+type defined in a schema file), don't rely on Step 4's graph query to have
+surfaced that content — confirmed by testing, the graph has no model/field
+representation of schema files at all. Read the schema file directly here
+if it's relevant to the bug, the same way any other target file is read.
 
 Also read the last 5 commits touching this file (if a git history exists —
 skip this if Step 0 determined there is no git repository here):
@@ -229,6 +259,30 @@ The fix must be:
 - **Surgical** — one value, one line, one file whenever possible.
 - **Correct** — verify the fix makes sense by re-reading the file after applying it.
 - **Consistent** with any convention skill loaded in Step 6.
+
+If the fix changes an existing function's signature or behavior (not a
+constant/value swap), check its blast radius before finalizing:
+
+```bash
+graphify affected "<function or symbol being changed>" --relation calls --depth 2 --graph "$GRAPH_FILE"
+```
+
+**Confirmed by testing: this can under-report for a common pattern**
+(callers inside anonymous route-handler callbacks) — cross-check with a
+plain-text search and compare at the file level; see
+`references/graphify-guide.md`'s "Blast-radius checks" for the exact
+command and why it matters.
+
+Cheap and fast (well under a second, no LLM) — safe to run every time this
+applies, not something to skip for a fix that seems simple. This is
+information for the plan, not a reason to expand scope: if it returns
+callers beyond what the bug report describes, still fix only what the bug
+describes (still Minimal, still Surgical) — but name what else depends on
+this in the plan's "what I'm NOT going to do" section, so the developer
+confirming the plan knows the fix touches something more widely used than
+the bug report alone would suggest. Skip mentioning it if the affected list
+comes back empty or tightly scoped to just what the bug already describes —
+this only needs surfacing when it's actually informative.
 
 If you notice other issues in the file, do NOT fix them. Note them in the PR
 description only.
@@ -272,11 +326,18 @@ revert and redo.
 
 ## Step 10 — Commit
 
-**Only if Step 0 determined a git repository exists, and the developer wants
-git tracking for this change.** Otherwise, report the change made and stop —
-there is no commit to make.
+**Gate — do not commit unless BOTH are true:**
 
-Stage only the file you changed. Never `git add .`.
+1. Step 0 determined a git repository exists, AND
+2. The developer explicitly opted in to committing (see Step 1, item 5).
+
+If the developer did not ask for a commit — or did not answer — **stop here.**
+Report the change you made to the file (Step 12) and let the developer commit
+it themselves. Committing without an explicit go-ahead is exactly the behaviour
+this skill must avoid.
+
+Only when the developer has confirmed: stage only the file you changed. Never
+`git add .`.
 
 ```bash
 git -C "$REPO_DIR" add <target-file-path>
@@ -285,9 +346,12 @@ git -C "$REPO_DIR" commit -m "[agent] fix: <bug description, max 60 chars>"
 
 ## Step 11 — Push and open the PR
 
-**Only applies if this repository has a real GitHub remote and the developer
-wants a PR opened.** A local-only repository with no GitHub remote has nothing
-for this step to push to — report the local commit and stop instead.
+**Gate — only run this step if ALL are true:** a commit was actually made in
+Step 10 (i.e. the developer opted in), this repository has a real GitHub
+remote, and the developer wants a PR opened (Step 1, item 5). If the developer
+only asked for the fix — or did not explicitly ask to push — do not push and
+do not open a PR. A local-only repository with no GitHub remote likewise has
+nothing to push to — report the local commit and stop instead.
 
 ```bash
 git -C "$REPO_DIR" push origin agent/fix/<slug>-<date>
@@ -361,9 +425,36 @@ Step 0 determined applied:
 If confidence is medium or low, explain what you were uncertain about so the
 reviewer knows where to focus.
 
+**Graph-memory:** now that the real outcome is known, record it — see
+`GRAPH-MEMORY-PROTOCOL.md`. Be honest about `useful`/`dead_end`/`corrected`;
+this is not a place to default to `useful` for convenience.
+
+**If Step 6 loaded a convention skill, and something concrete within this
+same session revealed its guidance was wrong** — the developer explicitly
+pushed back on it, or Step 9's re-read/verification showed it didn't
+actually fit — record that too, tagged to the convention skill's name
+rather than a code node:
+
+```bash
+graphify save-result --question "was the <domain> coding-standards guidance correct for this fix" \
+  --answer "<what was applied>" --nodes "coding-standards-<domain>" \
+  --outcome corrected --correction "<what's actually true>"
+```
+
+**Do not record a routine `useful` outcome for convention guidance** —
+confirmed by testing this specific case: a domain name isn't a real graph
+node, so `reflect` has nothing to structurally verify it against, and a
+`useful` signal tagged this way produces no visible lesson at all, only a
+silent increment to a summary count. `corrected` and `dead_end` still
+surface correctly regardless, since they carry their own answer/correction
+text — this asymmetry is exactly why only genuine corrections are worth
+recording here, not everything.
+
 ## What the agent must NEVER do
 
 - Merge the PR — humans merge, always.
+- Commit or push a fix without the developer's explicit go-ahead (see Step 1,
+  item 5, and Steps 10–11). Default is to stop at the edited file.
 - Delete any file.
 - Push directly to `main`.
 - Fix more than what the bug description describes.
@@ -395,11 +486,3 @@ reviewer knows where to focus.
   naming, PR format, and guardrails reference
 - [`references/edge-cases.md`](./references/edge-cases.md) — known edge cases
   and how to handle them
-
-## Self-improvement
-
-If you encounter an edge case not covered by this skill:
-
-1. Append it to `references/edge-cases.md` under a new dated entry
-2. Format: date, condition, and exact handling steps used
-3. Do not modify any other section of this skill
