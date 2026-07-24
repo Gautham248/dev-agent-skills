@@ -202,7 +202,7 @@ Only relevant if you're writing or maintaining a master/dispatcher skill (see [`
 ```json
 {
   "_comment": "... states explicitly that these lists cover common cases, not an exhaustive set ...",
-  "version": 3,
+  "version": 4,
   "domains": [
     {
       "domain": "database",
