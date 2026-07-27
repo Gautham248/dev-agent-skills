@@ -6,11 +6,35 @@
 #
 # Usage:
 #   bash setup.sh
+#   bash setup.sh --check-security   # CI-suitable: run the security scanner
+#                                     # (scan-skillset.mjs) across every
+#                                     # skill folder currently in this repo
+#                                     # and exit — does not link, inject, or
+#                                     # write anything. Exit code 1 if any
+#                                     # critical/high finding exists anywhere,
+#                                     # 0 otherwise. Useful as a retroactive
+#                                     # baseline sweep and as a repeatable CI
+#                                     # gate on every PR, catching a poisoned
+#                                     # skill that was hand-authored or
+#                                     # merged directly rather than pulled in
+#                                     # through skill-add (which already
+#                                     # scans on the way in).
 
 set -e
 
 SKILLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_COUNT=0
+
+if [ "${1:-}" = "--check-security" ]; then
+  echo "dev-agent-skills — security scan (--check-security)"
+  echo "Skills directory: $SKILLS_DIR"
+  echo ""
+  if ! command -v node &>/dev/null; then
+    echo "✗ --check-security requires Node.js. Install Node and re-run." >&2
+    exit 1
+  fi
+  exec node "$SKILLS_DIR/skill-add/scripts/scan-skillset.mjs" --repo-root "$SKILLS_DIR"
+fi
 
 echo "dev-agent-skills setup"
 echo "Skills directory: $SKILLS_DIR"
