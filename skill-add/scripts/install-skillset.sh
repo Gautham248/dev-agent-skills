@@ -25,6 +25,12 @@
 #   --dry-run            Show what would be imported/skipped without
 #                        touching the filesystem.
 #   --skip-setup         Don't automatically run setup.sh afterwards.
+#   --allow-unsafe        Import even if the security scan (see step 2
+#                        below) finds critical/high-severity issues.
+#                        Only use this after reading the findings and
+#                        confirming by hand they're false positives —
+#                        this does not suppress the report, it just lets
+#                        the import proceed despite it.
 #
 # What this actually does:
 #   1. Shallow-clones the source repo to a temp directory.
@@ -32,8 +38,11 @@
 #      SKILL.md in it (at any depth), flattens each into its own folder
 #      at this repo's root (the same one-folder-per-skill convention
 #      CONTRIBUTING.md already documents), handles name collisions,
-#      rewrites cross-skill references it can resolve, and records
-#      provenance in .skillsets.json + SKILLSETS.md.
+#      runs a security scan (scan-skillset.mjs) over every candidate
+#      BEFORE anything is written to disk — critical/high findings block
+#      the import unless --allow-unsafe is passed — rewrites cross-skill
+#      references it can resolve, and records provenance (including the
+#      scan outcome) in .skillsets.json + SKILLSETS.md.
 #   3. Regenerates the README skills table.
 #   4. Runs setup.sh, so the newly-imported skills get symlinked into
 #      every detected IDE/harness and get the clarification-protocol
@@ -58,9 +67,10 @@ ONLY=""
 REF=""
 DRY_RUN="false"
 SKIP_SETUP="false"
+ALLOW_UNSAFE="false"
 
 usage() {
-  sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'
   exit 1
 }
 
@@ -75,6 +85,7 @@ while [ $# -gt 0 ]; do
     --ref) REF="$2"; shift 2 ;;
     --dry-run) DRY_RUN="true"; shift ;;
     --skip-setup) SKIP_SETUP="true"; shift ;;
+    --allow-unsafe) ALLOW_UNSAFE="true"; shift ;;
     -h|--help) usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
@@ -115,8 +126,23 @@ NODE_ARGS=(
 [ -n "$ONLY" ] && NODE_ARGS+=(--only "$ONLY")
 [ -n "$REF" ] && NODE_ARGS+=(--ref "$REF")
 [ "$DRY_RUN" = "true" ] && NODE_ARGS+=(--dry-run)
+[ "$ALLOW_UNSAFE" = "true" ] && NODE_ARGS+=(--allow-unsafe)
 
+# Not `set -e`'d through here on purpose: install-skillset.mjs exits 1 for
+# two different reasons — a security scan block (expected, should print a
+# clean message and stop) or a genuine script error (should still surface
+# as a failure). Since it already prints its own full report either way,
+# this wrapper doesn't need to re-explain what happened, just react to it.
+set +e
 node "${NODE_ARGS[@]}"
+NODE_EXIT=$?
+set -e
+
+if [ "$NODE_EXIT" -ne 0 ]; then
+  echo ""
+  echo "✗ install-skillset.mjs exited with status $NODE_EXIT — see output above. Nothing further was run (setup.sh was not invoked)."
+  exit "$NODE_EXIT"
+fi
 
 if [ "$DRY_RUN" = "true" ]; then
   echo ""
