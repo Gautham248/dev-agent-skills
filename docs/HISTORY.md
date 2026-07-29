@@ -163,8 +163,34 @@ Everything else tested came back genuinely working: `skill-factory`'s `scaffold_
 
 ---
 
+## Skill security scanning added (`setup.sh --check-security`)
+
+**Before:** Skills imported from external repositories were wired in by `skill-add` and `setup.sh` with no automated inspection of their content. A `SKILL.md` is executable instruction for an agent, so an imported skill carried the same trust weight as a new dependency — reviewed by whoever happened to read the diff, if anyone.
+
+**After:** `bash setup.sh --check-security` runs a read-only scanner (`skill-add/scripts/scan-skillset.mjs`) across every skill and exits non-zero on any `critical` or `high` finding. Twelve rules across five categories: remote execution, instruction hijacking, credential exfiltration, hidden Unicode, and suspicious links, plus one structural rule (`SEC-STRUCT-001`) for the front-loaded-inducement pattern — a helper script framed as a required first step *above* the skill's own stated purpose, so an agent runs it before evaluating relevance. `skill-add` invokes it automatically on import; the flag makes it available as a CI gate and a manual check after any pull.
+
+**Why:** Importing external skillsets was already supported and encouraged, which made the untrusted-input problem structural rather than hypothetical. A mechanical scan does not replace reading the diff, but it catches the documented patterns consistently, which a human reviewer on their twentieth import will not.
+
+**Note on false positives:** a skill that legitimately needs to *reference* a flagged pattern — a security skill, or `review-pr`'s own injection detector and its tests — builds the string from fragments at runtime instead of writing it literally. The scanner correctly flags the literal form; suppressing it would weaken the rule for everyone.
+
+---
+
+## `review-pr` added — composition by lens rather than dispatch
+
+**Before:** PR review was covered by `first-principles-review`, which supplies the reasoning stance (assumptions, blast radius, rollback, severity buckets) but has no GitHub I/O — no PR fetch, no line anchoring, no posting. Applying company standards to a PR meant a human holding several skills in their head at once, and any per-project review rule learned along the way lived nowhere.
+
+**After:** `review-pr` fetches a PR, applies a set of **lenses**, and posts one review of line-anchored findings plus a summary. It restates no standards. `references/lens-registry.json` names the skills to read; an `expand_from` entry derives one lens per domain from `coding-standards/references/manifest.json`, so a new `coding-standards-*` sub-skill becomes a review lens with no registry edit. Findings carry the lens that raised them, a verbatim evidence line validated against the diff, and a confidence; findings are merged across lenses on `(file, line, side)`, low-confidence ones are held back from posting, and every skipped lens is named in the summary.
+
+The skill opts into `graph-memory` (a review has an honest completion point — the review is posted) and `session-memory`. It never approves and never merges, and the confirmation gate before posting doubles as the learning-capture point: rules learned from cut findings are staged in the **target** repo at `.dev-agent/review-conventions.md`, promoted only on explicit confirmation.
+
+**Why:** The failure mode being designed against is not "no automated review" but *unselective* review — twenty comments a reviewer scrolls past, which is a linter with a worse interface. Restating standards inside the review skill would also have created a second place for every rule to drift from; reading them as lenses means the standard has exactly one home.
+
+**Distinct from dispatch:** `coding-standards` decides which sub-skill should do the work and hands off. `review-pr` reads several skills and applies each to the same diff, merging results. Both compose, but a dispatcher routes and a lens set accumulates.
+
+---
+
 ## Current state snapshot (at time of writing)
 
-20 skills at the repo root: `coding-standards` + its 7 domain sub-skills (including `coding-standards-tailwind`), `eslint-rule-author`, `first-principles-review`, `fix-bug`, `graphify`, `investigate-issue`, `plan-feature`, `skill-add`, `skill-factory`, `skill-update`, `sync-prs`, `typescript-conventions`, `webapp-conventions`. Four managed protocols: clarification and self-improvement unconditional; session-memory opt-in (`coding-standards`, `sync-prs`); graph-memory opt-in (`fix-bug`, `plan-feature`). Six standing rules (0, 0b, 1, 2, 3, and the meta-principle) in `AGENT-STANDING-RULES.md`. `coding-standards`' domain manifest at version 4, broadened three times (database/frontend for TypeORM/Sequelize/Angular/Astro; backend/frontend for NestJS/Nuxt; a wholly new domain, Tailwind, added rather than an existing one broadened), its detection fed by `graphify`'s own build rather than a separate pass. `fix-bug` additionally checks blast radius via `graphify affected` before finalizing a fix. `validate_skill.py` fully passes across all 20.
+21 skills at the repo root: `coding-standards` + its 7 domain sub-skills (including `coding-standards-tailwind`), `eslint-rule-author`, `first-principles-review`, `fix-bug`, `graphify`, `investigate-issue`, `plan-feature`, `review-pr`, `skill-add`, `skill-factory`, `skill-update`, `sync-prs`, `typescript-conventions`, `webapp-conventions`. Four managed protocols: clarification and self-improvement unconditional; session-memory opt-in (`coding-standards`, `sync-prs`, `review-pr`); graph-memory opt-in (`fix-bug`, `plan-feature`, `review-pr`). Six standing rules (0, 0b, 1, 2, 3, and the meta-principle) in `AGENT-STANDING-RULES.md`. `coding-standards`' domain manifest at version 4, broadened three times (database/frontend for TypeORM/Sequelize/Angular/Astro; backend/frontend for NestJS/Nuxt; a wholly new domain, Tailwind, added rather than an existing one broadened), its detection fed by `graphify`'s own build rather than a separate pass. `fix-bug` additionally checks blast radius via `graphify affected` before finalizing a fix. `validate_skill.py` fully passes across all 21.
 
 

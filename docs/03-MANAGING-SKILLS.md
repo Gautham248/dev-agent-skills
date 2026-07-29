@@ -310,6 +310,23 @@ For each warning:
 - If it looks like a documentation placeholder (e.g. `/path/to/skills/x/y`), it's harmless — leave it.
 - If it's a skill from a completely different source, decide whether to import that source too.
 
+**Step 3b — Scan the imported content before wiring it in:**
+
+```bash
+bash setup.sh --check-security
+```
+
+`skill-add` runs this automatically, but run it yourself before `setup.sh` if
+you imported by hand or pulled someone else's branch. A `SKILL.md` is
+executable instruction for an agent, so imported skill content is untrusted
+input in the same sense a new dependency is — and the scan is read-only, so
+running it costs nothing.
+
+Exits non-zero on any `critical` or `high` finding. If it flags something,
+`docs/06-REFERENCE.md` explains each rule ID. Not every finding is malicious:
+a skill that legitimately documents a flagged pattern should build the string
+from fragments at runtime rather than writing it literally.
+
 **Step 4 — Run setup.sh:**
 
 ```bash

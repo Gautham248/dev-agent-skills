@@ -159,20 +159,25 @@ print('notable_dirs:', s['notable_dirs'])
 " || echo "MISSING -- Step 2 will fall back to direct detection commands instead"
 ```
 
-### 6. `graph-memory` wiring — the two opted-in skills, both markers present
+### 6. `graph-memory` wiring — the three opted-in skills, both markers present
 
 ```bash
-# Confirm exactly the two intended skills opted in, nothing else
+# Confirm exactly the three intended skills opted in, nothing else
 grep -l "graph-memory: true" */SKILL.md
-# expected: fix-bug/SKILL.md and plan-feature/SKILL.md, nothing else
+# expected: fix-bug/SKILL.md, plan-feature/SKILL.md, review-pr/SKILL.md — nothing else
 ```
+
+`coding-standards` is deliberately **not** on this list: it has no honest
+completion point in its step structure, so the after-finishing record the
+protocol expects would have nowhere truthful to fire. `review-pr` does have
+one — the review is posted — which is why it qualifies.
 
 ```bash
 # Each opted-in skill needs BOTH markers (before-query check, after-finishing record) --
 # one marker alone means the flag only does half its job. Matching on the bold
 # markdown specifically, since the injected pointer text above also mentions
 # "Graph-memory:" once in its own explanation -- a plain grep would overcount.
-for skill in fix-bug plan-feature; do
+for skill in fix-bug plan-feature review-pr; do
   echo "=== $skill ==="
   grep -c '\*\*Graph-memory:\*\*' "$skill/SKILL.md"
 done
@@ -184,6 +189,63 @@ done
 # memory commands work at all on this machine
 graphify reflect 2>&1 | head -3
 ```
+
+### 7. Security scan — clean across every skill
+
+```bash
+bash setup.sh --check-security
+# expected: "✓ No security findings across N skill dir(s)."
+# exits 0 on clean, 1 if anything critical/high is found
+```
+
+Run this after any `git pull` that brought in skills you did not write, and
+after any `/skill-add` import. The scan is read-only — it never injects,
+symlinks, or modifies anything, so it is safe to run at any point.
+
+If it reports findings, `docs/06-REFERENCE.md` lists what each rule ID means.
+A finding is not automatically malicious: a skill that legitimately documents
+a flagged pattern (a security skill, or this repo's own `review-pr` injection
+detector) should build the string from fragments at runtime rather than
+writing it literally.
+
+### 8. `review-pr` lens registry resolves against the real repo
+
+```bash
+# The registry is valid JSON and its expand_from target exists.
+# Explicit if/exit, not `set -e` -- a failing command inside a `&&` chain
+# used as a standalone statement is exempt from `set -e` in bash, so that
+# form would print nothing on failure and still exit 0.
+if ! node -e "JSON.parse(require('fs').readFileSync('review-pr/references/lens-registry.json','utf8'))"; then
+  echo "✗ lens-registry.json is not valid JSON" >&2
+  exit 1
+fi
+echo "✓ registry OK"
+
+if [ ! -f coding-standards/references/manifest.json ]; then
+  echo "✗ expand_from target missing: coding-standards/references/manifest.json" >&2
+  exit 1
+fi
+echo "✓ expand_from target present"
+
+# Every lens the registry names resolves to a real skill, and the
+# coding-standards sub-skills expand from the manifest rather than being
+# duplicated in the registry
+node review-pr/scripts/review-cli.mjs plan \
+  --diff <(git diff HEAD~1 HEAD) --skills-root "$PWD"
+# expected: a lens list including coding-standards-* entries that appear
+# nowhere in lens-registry.json, and an empty or explained "Skipped" section
+```
+
+```bash
+# The deterministic scaffolding still passes
+node --test review-pr/scripts/tests/review-lib.test.mjs
+# expected: "# fail 0"
+```
+
+A lens listed under **Skipped** with `SKILL.md not found` means a skill was
+renamed or removed without updating the registry — the review still runs, but
+applies fewer standards than the registry claims, which is exactly the drift
+this check exists to catch.
 
 ---
 
