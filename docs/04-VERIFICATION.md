@@ -211,10 +211,21 @@ writing it literally.
 ### 8. `review-pr` lens registry resolves against the real repo
 
 ```bash
-# The registry is valid JSON and its expand_from target exists
-node -e "JSON.parse(require('fs').readFileSync('review-pr/references/lens-registry.json','utf8'))" \
-  && echo "registry OK"
-test -f coding-standards/references/manifest.json && echo "expand_from target present"
+# The registry is valid JSON and its expand_from target exists.
+# Explicit if/exit, not `set -e` -- a failing command inside a `&&` chain
+# used as a standalone statement is exempt from `set -e` in bash, so that
+# form would print nothing on failure and still exit 0.
+if ! node -e "JSON.parse(require('fs').readFileSync('review-pr/references/lens-registry.json','utf8'))"; then
+  echo "✗ lens-registry.json is not valid JSON" >&2
+  exit 1
+fi
+echo "✓ registry OK"
+
+if [ ! -f coding-standards/references/manifest.json ]; then
+  echo "✗ expand_from target missing: coding-standards/references/manifest.json" >&2
+  exit 1
+fi
+echo "✓ expand_from target present"
 
 # Every lens the registry names resolves to a real skill, and the
 # coding-standards sub-skills expand from the manifest rather than being

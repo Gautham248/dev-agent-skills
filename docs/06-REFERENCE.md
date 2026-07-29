@@ -25,7 +25,9 @@ Run from the `dev-agent-skills` root after cloning, after `git pull`, after addi
 
 ### `bash setup.sh --check-security`
 
-Runs the skill-security scanner and exits — it does **not** inject protocols, symlink, or modify anything. Read-only, safe to run anywhere, and the intended CI entry point.
+Runs the skill-security scanner and exits — it does **not** inject protocols, symlink, or modify anything. Read-only and the intended CI entry point.
+
+`bash setup.sh --check-security` (no path) must be run from the repo root, same as plain `bash setup.sh`. Invoked with a path instead -- `bash /path/to/dev-agent-skills/setup.sh --check-security` -- it resolves its own location and works from anywhere; it does not depend on the current working directory, only on how it's invoked.
 
 Requires Node.js. Delegates to `skill-add/scripts/scan-skillset.mjs`.
 

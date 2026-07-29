@@ -126,8 +126,13 @@ both places would guarantee the two drift.
 A lens is skipped when its `applies_to` matches no changed file, or when its
 `requires_domain` isn't present in the target repo (no database standard on a
 repo with no database). **Every skipped lens is named in the posted review
-summary** — a review that quietly applied fewer standards than the registry
-declares would overstate its own coverage.
+summary, provided the review was created with `--plan <file>` passed to
+`post`.** `plan` is where the lens report is computed; `post` only renders it
+when handed that file. Without `--plan`, the "Lenses applied" section --
+including the skipped list -- is omitted from the summary entirely, so a
+review created that way says nothing about its own coverage rather than
+overstating it. The skill's own Step 9 always passes `--plan`; this caveat
+matters only if you call the CLI directly.
 
 ### What you'll be asked at the end of a review
 
