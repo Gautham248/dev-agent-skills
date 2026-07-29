@@ -748,7 +748,20 @@ export function sortFindings(findings) {
  * Resolve the event *before* submitting rather than catching the error after
  * — a 422 on submit loses the entire batch of line comments.
  */
-export function resolveReviewEvent({ prAuthor, reviewerLogin, hasBlockers, requested }) {
+export function resolveReviewEvent({ prAuthor, reviewerLogin, hasBlockers, requested, pending }) {
+  // Pending review: no event is sent at all, so none of the event-legality
+  // rules below apply. Notably the self-review 422 does not bite -- an author
+  // may leave pending comments on their own PR, they simply cannot submit
+  // them as APPROVE or REQUEST_CHANGES afterwards.
+  if (pending) {
+    return {
+      event: null,
+      pending: true,
+      downgraded: false,
+      reason: "created as a PENDING review — visible only to you until you submit it on GitHub",
+    };
+  }
+
   const isSelfReview =
     typeof prAuthor === "string" &&
     typeof reviewerLogin === "string" &&
@@ -814,9 +827,15 @@ export function buildReviewPayload({
     return c;
   });
 
-  const payload = { body: summary, event, comments };
+  // Omitting `event` entirely is what makes GitHub create the review in
+  // PENDING state: the comments exist on the PR, rendered inline in the real
+  // diff, but are visible only to the reviewer who created them until they
+  // submit. Sending `event: null` is NOT the same thing and is rejected --
+  // the key must be absent.
+  const payload = { body: summary, comments };
+  if (event) payload.event = event;
   if (commitId) payload.commit_id = commitId;
-  return { payload, truncated };
+  return { payload, truncated, pending: !event };
 }
 
 export function renderFindingBody(f) {
@@ -941,6 +960,24 @@ export function reviewMarker(headSha) {
 export function hasExistingReview(existingReviews, headSha) {
   const marker = reviewMarker(headSha);
   return (existingReviews || []).some((r) => typeof r.body === "string" && r.body.includes(marker));
+}
+
+/**
+ * GitHub allows exactly one pending review per user per PR; a second create
+ * fails with "User can only have one pending review per pull request". That
+ * error is recoverable but only if the caller knows which review to clear, so
+ * find it first rather than letting the create fail.
+ */
+export function findPendingReview(existingReviews, reviewerLogin) {
+  return (
+    (existingReviews || []).find(
+      (r) =>
+        r &&
+        r.state === "PENDING" &&
+        (!reviewerLogin ||
+          (r.user && String(r.user.login).toLowerCase() === String(reviewerLogin).toLowerCase()))
+    ) || null
+  );
 }
 
 /**

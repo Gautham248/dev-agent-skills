@@ -30,6 +30,7 @@ import {
   reviewMarker,
   hasExistingReview,
   assertHeadUnchanged,
+  findPendingReview,
   detectInjectionAttempts,
   loadRepoConventions,
   planDiffChunks,
@@ -271,6 +272,18 @@ function cmdPost(a) {
     if (hasExistingReview(existingReviews, currentSha)) {
       die(`This head SHA has already been reviewed by review-pr. Nothing to do (re-review requires a new push).`);
     }
+
+    const existingPending = findPendingReview(existingReviews, a.reviewer);
+    if (existingPending) {
+      die(
+        `You already have a PENDING review on this PR (id ${existingPending.id}).\n` +
+        `GitHub allows only one pending review per user per pull request.\n\n` +
+        `Submit or discard it first:\n` +
+        `  node scripts/review-cli.mjs submit --repo ${repo} --pr ${pr} --review-id ${existingPending.id} --event COMMENT\n` +
+        `  node scripts/review-cli.mjs discard --repo ${repo} --pr ${pr} --review-id ${existingPending.id}\n` +
+        `Or on GitHub: open the PR and use "Cancel review" at the end of the Conversation tab.`
+      );
+    }
   }
 
   let reviewer = a.reviewer;
@@ -278,8 +291,15 @@ function cmdPost(a) {
     try { reviewer = gh(["api", "user", "--jq", ".login"]).trim(); } catch { reviewer = null; }
   }
 
+  // Pending is the DEFAULT. Publishing immediately requires opting in with
+  // --publish. The manager's framing is the right one: the reviewer should see
+  // the comments rendered against the real diff, in GitHub, before anyone else
+  // sees them at all.
+  const pending = a.publish !== true;
+
   const hasBlockers = post.some((f) => f.severity === "blocker");
   const eventDecision = resolveReviewEvent({
+    pending,
     prAuthor,
     reviewerLogin: reviewer,
     hasBlockers,
@@ -323,8 +343,10 @@ function cmdPost(a) {
   const payload = { ...draft, body: summary };
 
   if (dryRun) {
-    console.log(`# Dry run — nothing posted\n`);
-    console.log(`  event:    ${payload.event}  (${eventDecision.reason})`);
+    console.log(`# Dry run — nothing sent\n`);
+    console.log(`  mode:     ${pending ? "PENDING (visible only to you until submitted)" : "PUBLISH immediately"}`);
+    console.log(`  event:    ${payload.event ?? "(omitted — this is what makes it PENDING)"}`);
+    console.log(`  reason:   ${eventDecision.reason}`);
     console.log(`  comments: ${payload.comments.length}${truncated.length ? ` (+${truncated.length} in summary)` : ""}`);
     console.log(`  held:     ${held.length}\n`);
     console.log(JSON.stringify(payload, null, 2));
@@ -338,10 +360,25 @@ function cmdPost(a) {
   try {
     const res = gh(["api", "--method", "POST", `repos/${repo}/pulls/${pr}/reviews`, "--input", tmp]);
     const parsed = JSON.parse(res);
-    console.log(`✓ Review posted: ${parsed.html_url}`);
-    console.log(`  event:    ${payload.event} (${eventDecision.reason})`);
-    console.log(`  comments: ${payload.comments.length}`);
-    console.log(`  held:     ${held.length}`);
+    if (pending) {
+      console.log(`✓ PENDING review created — nothing is visible to anyone else yet.`);
+      console.log(`  review id: ${parsed.id}   state: ${parsed.state}`);
+      console.log(`  comments:  ${payload.comments.length}   held: ${held.length}`);
+      console.log(``);
+      console.log(`  Review it in GitHub against the real diff:`);
+      console.log(`    https://github.com/${repo}/pull/${pr}/files`);
+      console.log(``);
+      console.log(`  Then either submit it in the GitHub UI ("Finish your review"),`);
+      console.log(`  or from here:`);
+      console.log(`    node scripts/review-cli.mjs submit --repo ${repo} --pr ${pr} \\`);
+      console.log(`      --review-id ${parsed.id} --event COMMENT`);
+      console.log(`    node scripts/review-cli.mjs discard --repo ${repo} --pr ${pr} --review-id ${parsed.id}`);
+    } else {
+      console.log(`✓ Review published: ${parsed.html_url}`);
+      console.log(`  event:    ${payload.event} (${eventDecision.reason})`);
+      console.log(`  comments: ${payload.comments.length}`);
+      console.log(`  held:     ${held.length}`);
+    }
   } catch (e) {
     const err = String(e.stderr || e.message);
     if (/422/.test(err)) {
@@ -361,18 +398,103 @@ function cmdPost(a) {
 }
 
 // ---------------------------------------------------------------------------
+function cmdSubmit(a) {
+  const { repo, pr } = a;
+  const reviewId = a["review-id"];
+  if (!repo || !pr || !reviewId) die("--repo, --pr and --review-id are required");
+
+  const event = typeof a.event === "string" ? a.event.toUpperCase() : "COMMENT";
+  if (!["COMMENT", "APPROVE", "REQUEST_CHANGES"].includes(event)) {
+    die(`--event must be COMMENT, APPROVE or REQUEST_CHANGES`);
+  }
+
+  // The self-review guard lives HERE, not at creation time. Creating a pending
+  // review on your own PR is allowed; submitting it as APPROVE or
+  // REQUEST_CHANGES is not, and that 422 would leave the pending review
+  // stranded rather than losing it -- recoverable, but confusing.
+  let meta, reviewer;
+  try {
+    meta = JSON.parse(gh(["pr", "view", String(pr), "--repo", repo, "--json", "author,state"]));
+    reviewer = gh(["api", "user", "--jq", ".login"]).trim();
+  } catch (e) {
+    die(`could not read PR or viewer identity: ${e.stderr || e.message}`);
+  }
+
+  const decision = resolveReviewEvent({
+    prAuthor: meta.author?.login,
+    reviewerLogin: reviewer,
+    hasBlockers: false,
+    requested: event,
+  });
+  if (decision.downgraded && event !== "COMMENT") {
+    die(
+      `\`${reviewer}\` authored this PR. GitHub rejects ${event} from the author (HTTP 422).\n` +
+      `The pending review is untouched — re-run with --event COMMENT, or have a\n` +
+      `different reviewer submit it from their own account.`
+    );
+  }
+
+  const body = { event };
+  if (typeof a.body === "string") body.body = a.body;
+
+  const tmp = path.join(os.tmpdir(), `review-pr-submit-${pr}-${process.pid}.json`);
+  fs.writeFileSync(tmp, JSON.stringify(body));
+  try {
+    const res = gh([
+      "api", "--method", "POST",
+      `repos/${repo}/pulls/${pr}/reviews/${reviewId}/events`,
+      "--input", tmp,
+    ]);
+    const parsed = JSON.parse(res);
+    console.log(`✓ Review submitted as ${event}: ${parsed.html_url}`);
+  } catch (e) {
+    const err = String(e.stderr || e.message);
+    if (/404/.test(err)) {
+      console.error(`✗ No pending review with id ${reviewId} on ${repo}#${pr}. It may already have been submitted or discarded.\n${err}`);
+    } else {
+      console.error(`✗ Failed to submit review:\n${err}`);
+    }
+    process.exit(1);
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
+function cmdDiscard(a) {
+  const { repo, pr } = a;
+  const reviewId = a["review-id"];
+  if (!repo || !pr || !reviewId) die("--repo, --pr and --review-id are required");
+  try {
+    gh(["api", "--method", "DELETE", `repos/${repo}/pulls/${pr}/reviews/${reviewId}`]);
+    console.log(`✓ Pending review ${reviewId} discarded. Nothing was published.`);
+  } catch (e) {
+    console.error(`✗ Failed to discard review:\n${String(e.stderr || e.message)}`);
+    process.exit(1);
+  }
+}
+
+// ---------------------------------------------------------------------------
 const a = args(process.argv.slice(2));
 const cmd = a._[0];
 if (cmd === "plan") cmdPlan(a);
 else if (cmd === "validate") cmdValidate(a);
 else if (cmd === "post") cmdPost(a);
+else if (cmd === "submit") cmdSubmit(a);
+else if (cmd === "discard") cmdDiscard(a);
 else {
   console.log(`review-pr CLI
 
   plan     --diff <f> [--skills-root <d>] [--domains a,b] [--registry <f>] [--json <f>]
   validate --diff <f> --findings <f>
   post     --repo <o/r> --pr <n> --diff <f> --findings <f> --head-sha <sha>
-           [--plan <f>] [--dry-run]
+           [--plan <f>] [--dry-run] [--publish]
+
+           Creates a PENDING review by default: the comments appear inline in
+           the real GitHub diff but are visible only to you until you submit.
+           --publish skips the pending stage and posts immediately.
+
+  submit   --repo <o/r> --pr <n> --review-id <id> [--event COMMENT|APPROVE|REQUEST_CHANGES] [--body <text>]
+  discard  --repo <o/r> --pr <n> --review-id <id>
 `);
   process.exit(cmd ? 1 : 0);
 }

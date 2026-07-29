@@ -36,6 +36,36 @@ lost, not just the offending one. All four are checked before submitting:
 4. **`start_line` >= `line`, or a different `start_side`.** Caught by
    `validate`.
 
+## Pending reviews (the default)
+
+Omitting `event` from the create-review call makes GitHub create the review in
+`PENDING` state. The comments are attached to the PR and render inline in the
+real diff, but are visible only to the user who created them until they submit.
+
+`event: null` is **not** the same as omitting the key and is rejected — the
+property must be absent. `buildReviewPayload` only adds `event` when one is
+supplied, and a test asserts the key is missing in pending mode.
+
+Submit or discard:
+
+```
+POST   /repos/{owner}/{repo}/pulls/{n}/reviews/{review_id}/events   {"event": "COMMENT"}
+DELETE /repos/{owner}/{repo}/pulls/{n}/reviews/{review_id}
+```
+
+Three constraints:
+
+1. **One pending review per user per PR.** A second create fails with
+   `User can only have one pending review per pull request`. `findPendingReview`
+   detects an existing one first and prints the submit/discard commands rather
+   than letting the create fail with an error that doesn't say what to do next.
+2. **Pending comments are visible only to their creator.** A pending review
+   created under a bot token is invisible to the human reviewer. Run under the
+   reviewer's own credentials.
+3. **The self-review 422 moves to submit time.** Creating pending comments on
+   your own PR is fine; submitting them as `APPROVE`/`REQUEST_CHANGES` is not.
+   `submit` checks first and refuses without touching the pending review.
+
 ## Idempotency
 
 The reviews API has no natural dedup — submitting twice posts twice. The

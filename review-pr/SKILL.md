@@ -228,7 +228,7 @@ Nothing is promoted automatically. One reviewer disputing one finding is not
 a standard; treating it as one is how a review agent learns a junior's
 preference and enforces it on everyone.
 
-## Step 9 -- Post
+## Step 9 -- Stage the review as PENDING
 
 Only after confirmation:
 
@@ -242,18 +242,53 @@ node scripts/review-cli.mjs post \
   --dry-run
 ```
 
-Drop `--dry-run` to submit. Before submitting it re-checks that the head SHA
-has not moved, that this SHA has not already been reviewed, and that the
-review event is legal for this author/reviewer pair.
+Drop `--dry-run` to create it. **This creates a PENDING review, which is the
+default.** The comments land on the PR inline in the real diff, but GitHub
+shows them to nobody except you until you submit -- so you read the review the
+way the author will, with full diff context, before anyone else sees a word of
+it.
 
-**The self-review guard matters here.** GitHub rejects `APPROVE` and
-`REQUEST_CHANGES` from a PR's own author with a 422. Since `dev-agent`
-authors PRs, that is the common case, and the event is downgraded to
-`COMMENT` before submitting rather than after failing.
+The terminal draft in Step 7 tells you *what* the findings say. The pending
+review shows you whether they landed on the right lines, which plain text
+cannot.
+
+Before creating it, the tool re-checks that the head SHA has not moved, that
+this SHA has not already been reviewed, and that you do not already have a
+pending review on this PR -- GitHub permits only one per user per PR.
+
+**Whose account matters.** Pending comments are visible only to the user who
+created them. If the skill runs under a bot token, the bot sees the pending
+review and you do not. For this step to do what it is for, run it under the
+reviewer's own credentials.
+
+## Step 9b -- Submit, or discard
+
+Open the PR's **Files changed** tab and read the comments in place. Then:
+
+- **In GitHub** -- "Finish your review", choose Comment / Approve / Request
+  changes, submit. Individual pending comments can be edited or deleted first;
+  "Cancel review" discards all of them.
+- **Or from the terminal:**
+
+```bash
+node scripts/review-cli.mjs submit  --repo <owner>/<repo> --pr <number> \
+  --review-id <id> --event COMMENT
+node scripts/review-cli.mjs discard --repo <owner>/<repo> --pr <number> --review-id <id>
+```
+
+**The self-review guard applies at submit, not at creation.** Creating pending
+comments on your own PR is allowed; submitting them as `APPROVE` or
+`REQUEST_CHANGES` is not -- GitHub returns 422. `submit` checks the
+author/reviewer pair first and refuses without touching the pending review, so
+nothing is lost.
+
+`--publish` on Step 9 skips the pending stage and posts immediately. Use it
+only where a human has already read the findings some other way.
 
 **This skill never approves and never merges.** Approval is a human
-attestation. Absence of findings is not approval -- it is absence of
-findings, and the summary says exactly that.
+attestation -- which is precisely what clicking Submit in GitHub is. Absence
+of findings is not approval; it is absence of findings, and the summary says
+exactly that.
 
 ## Step 10 -- Report back
 
@@ -266,12 +301,13 @@ alone, the graph step added nothing on this PR and recording it as `useful`
 poisons the record for the next one.
 
 ```
-✓ Reviewed <owner>/<repo>#<number> @ <sha>
+✓ Staged review on <owner>/<repo>#<number> @ <sha>
   Lenses:   <applied>  (skipped: <skipped + reason>)
   Findings: <n> blocker, <n> should, <n> nit
-  Held:     <n> low-confidence (not posted)
-  Event:    COMMENT | REQUEST_CHANGES  (<why>)
-  URL:      <review url>
+  Held:     <n> low-confidence (not staged)
+  State:    PENDING — visible only to you
+  Review:   https://github.com/<owner>/<repo>/pull/<number>/files
+  Next:     submit in GitHub, or `submit --review-id <id> --event COMMENT`
 ```
 
 ## If something goes wrong

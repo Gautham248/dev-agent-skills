@@ -37,6 +37,7 @@ import {
   reviewMarker,
   hasExistingReview,
   assertHeadUnchanged,
+  findPendingReview,
   detectInjectionAttempts,
   planDiffChunks,
 } from "../review-lib.mjs";
@@ -996,5 +997,69 @@ describe("repo-local conventions — the read side of the learning loop", () => 
     assert.equal(r.present, true);
     assert.match(r.error, /EACCES/);
     assert.deepEqual(r.applicable, []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("pending reviews", () => {
+  test("omitting event is what creates a PENDING review — the key must be absent", () => {
+    const { payload, pending } = buildReviewPayload({
+      findings: [makeFinding()],
+      summary: "s",
+      commitId: "abc",
+      event: null,
+    });
+    assert.equal(pending, true);
+    assert.equal("event" in payload, false, "`event: null` is rejected by GitHub; the key must not exist");
+    assert.equal(payload.comments.length, 1, "comments still travel with a pending review");
+    assert.equal(payload.commit_id, "abc");
+  });
+
+  test("an explicit event still produces a published review", () => {
+    const { payload, pending } = buildReviewPayload({
+      findings: [makeFinding()], summary: "s", event: "COMMENT",
+    });
+    assert.equal(pending, false);
+    assert.equal(payload.event, "COMMENT");
+  });
+
+  test("pending short-circuits the self-review guard — an author may draft on their own PR", () => {
+    const r = resolveReviewEvent({
+      prAuthor: "gautham248",
+      reviewerLogin: "gautham248",
+      hasBlockers: true,
+      pending: true,
+    });
+    assert.equal(r.event, null);
+    assert.equal(r.pending, true);
+    assert.equal(r.downgraded, false, "no downgrade happens because no event is sent");
+  });
+
+  test("pending overrides even an explicitly requested event", () => {
+    const r = resolveReviewEvent({
+      prAuthor: "adhil", reviewerLogin: "gautham248",
+      hasBlockers: true, requested: "APPROVE", pending: true,
+    });
+    assert.equal(r.event, null);
+  });
+
+  test("an existing pending review by the same user is found", () => {
+    const reviews = [
+      { id: 1, state: "COMMENTED", user: { login: "gautham248" } },
+      { id: 2, state: "PENDING", user: { login: "gautham248" } },
+    ];
+    assert.equal(findPendingReview(reviews, "gautham248").id, 2);
+    assert.equal(findPendingReview(reviews, "Gautham248").id, 2, "login match is case-insensitive");
+  });
+
+  test("another user's pending review is not mistaken for your own", () => {
+    const reviews = [{ id: 3, state: "PENDING", user: { login: "adhil" } }];
+    assert.equal(findPendingReview(reviews, "gautham248"), null);
+  });
+
+  test("no pending review present", () => {
+    assert.equal(findPendingReview([], "x"), null);
+    assert.equal(findPendingReview(null, "x"), null);
+    assert.equal(findPendingReview([{ id: 1, state: "APPROVED", user: { login: "x" } }], "x"), null);
   });
 });
