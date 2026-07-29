@@ -96,6 +96,57 @@ Fix the broken App Store link on the hero section — it should point to <new-ur
 
 ---
 
+## Composed skills — how `review-pr` uses other skills as lenses
+
+`coding-standards` composes by **dispatch**: it decides which sub-skill should
+handle the work, and hands off. `review-pr` composes differently — it reads
+other skills as *lenses* and applies each as a separate reading of the same
+diff, then merges the results into one review.
+
+The lens list lives in `review-pr/references/lens-registry.json`. **That file
+is the thing you edit** when a standard should start influencing PR review —
+you never rewrite `review-pr/SKILL.md` to teach it a new rule.
+
+Two entry shapes:
+
+```jsonc
+// Name one skill directly
+{ "skill": "typescript-conventions", "applies_to": [".ts", ".tsx"], "order": 60 }
+
+// Or derive lenses from a dispatcher's own routing table
+{ "expand_from": "coding-standards", "order": 20 }
+```
+
+`expand_from` reads `coding-standards/references/manifest.json` and produces
+one lens per domain. Adding a new `coding-standards-*` sub-skill to that
+manifest — which you already have to do — makes it a review lens with **no
+edit to the registry at all**. This is deliberate: listing the sub-skills in
+both places would guarantee the two drift.
+
+A lens is skipped when its `applies_to` matches no changed file, or when its
+`requires_domain` isn't present in the target repo (no database standard on a
+repo with no database). **Every skipped lens is named in the posted review
+summary** — a review that quietly applied fewer standards than the registry
+declares would overstate its own coverage.
+
+### What you'll be asked at the end of a review
+
+Nothing is posted to GitHub until you confirm — same gate as commits and
+pushes. When you cut findings from the draft, the agent may ask *once* why,
+and only about cuts that look like a repeatable rule:
+
+> Two of the cut findings look like standing rules rather than one-offs:
+> 1. `DocList.tsx:4` (per-component Supabase client) — rule here, or fine in
+>    this case?
+>
+> Anything you say yes to is staged as a candidate, not applied yet.
+
+A confirmed rule is staged in the **target repo** at
+`.dev-agent/review-conventions.md`, not in this skills repo — a rule about one
+codebase shouldn't be enforced on every codebase. It is applied to future
+reviews only after it is promoted explicitly. One reviewer disputing one
+finding is evidence about a rule, not proof of one.
+
 ## Session-memory — when the agent skips a check and says so
 
 A small number of skills (`coding-standards`, `sync-prs` — see [`06-REFERENCE.md`](./06-REFERENCE.md) for the current list) have specific, individual steps marked as safe to skip if the same check already ran earlier in the same conversation. When this happens, the agent will say so explicitly, something like:
