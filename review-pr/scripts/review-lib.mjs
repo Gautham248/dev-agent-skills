@@ -863,6 +863,8 @@ export function renderSummary({
   unanchorable = [],
   held = [],
   truncated = [],
+  stillOpen = [],
+  suppressedDuplicates = [],
   lensReport,
   prMeta = {},
   eventDecision,
@@ -927,6 +929,31 @@ export function renderSummary({
     out.push("");
   }
 
+  if (stillOpen && stillOpen.length) {
+    const mine = stillOpen.filter((s) => s.own);
+    const others = stillOpen.filter((s) => !s.own);
+    out.push(`### ${stillOpen.length} previously-raised item(s) still open — not re-posted, flagging for visibility`);
+    out.push("");
+    if (mine.length) {
+      out.push(`_From this reviewer's own prior pass, apparently not yet addressed:_`);
+      for (const s of mine) out.push(`- \`${s.file}:${s.line}\` — ${s.summary}`);
+      out.push("");
+    }
+    if (others.length) {
+      out.push(`_Raised by another reviewer, apparently not yet addressed:_`);
+      for (const s of others) out.push(`- \`${s.file}:${s.line}\` (@${s.raisedBy || "unknown"}) — ${s.summary}`);
+      out.push("");
+    }
+  }
+
+  if (suppressedDuplicates && suppressedDuplicates.length) {
+    out.push(
+      `_${suppressedDuplicates.length} finding(s) from this pass duplicated something already ` +
+        `on the PR and were not posted again — see the section above._`
+    );
+    out.push("");
+  }
+
   if (held.length) {
     out.push(
       `_${held.length} low-confidence finding(s) were held back and reported to the reviewer only._`
@@ -945,8 +972,225 @@ export function renderSummary({
 }
 
 // ---------------------------------------------------------------------------
-// Idempotency
+// Cross-review deduplication (re-review and multi-reviewer)
 // ---------------------------------------------------------------------------
+//
+// The SHA-based idempotency above answers "has this exact commit already been
+// reviewed" and blocks a straight re-run. That is not what re-review needs.
+// Re-review happens at a NEW SHA on purpose (the dev pushed a fix), so the
+// SHA marker does not fire — and it should not, because the new commit does
+// need reviewing. What must not happen is re-raising findings that were
+// already said, by anyone, whether or not the code under them changed.
+//
+// Three outcomes per prior finding, checked against the new diff:
+//   fixed     — the evidence line is gone or has changed. Say nothing again.
+//   unfixed   — the evidence line is byte-for-byte the same. Do not repost as
+//               a new comment (that IS "not covering the previous comment"),
+//               but do not let it vanish either — surface it as a deferred
+//               item so a forgotten fix is still visible, just not re-argued.
+//   superseded — a DIFFERENT reviewer already raised the same finding. Drop
+//               it from this pass entirely; it is not this reviewer's to
+//               repeat, deferred or otherwise.
+//
+// Matching is on (file, normalized evidence), not (file, line). Line numbers
+// drift between commits for reasons that have nothing to do with whether an
+// issue was addressed — evidence text is what's actually being complained
+// about, and it is stable until someone edits that line.
+
+/**
+ * A finding is "the same finding" as a prior one if it names the same file
+ * and the evidence text matches after normalizing whitespace — not the
+ * rationale, which two lenses (or two reviewers) will phrase differently for
+ * an identical underlying issue.
+ */
+export function findingIdentity(f) {
+  return `${f.file}\u0000${normalizeForCompare(f.evidence || "")}`;
+}
+
+/**
+ * Parses this skill's own posted-review bodies back into a lightweight
+ * finding record, by reading the marker-tagged comments GitHub returns for
+ * each review. Only review-pr's own past reviews are parsed this way — a
+ * human's freehand comment has no structured shape to recover, which is why
+ * it is handled separately in classifyPriorFindings via reviewerLogin.
+ */
+export function extractPriorFindings(existingReviews) {
+  const out = [];
+  for (const review of existingReviews || []) {
+    if (!review || !Array.isArray(review.comments)) continue;
+    const reviewerLogin = review.user?.login || null;
+    for (const c of review.comments) {
+      if (!c || typeof c.path !== "string" || !Number.isInteger(c.line)) continue;
+      // The rendered body carries severity and lens in its first line (see
+      // renderFindingBody) but not the raw evidence text, since GitHub's
+      // own diff view is the evidence at read time. What's recoverable and
+      // sufficient for matching is (file, the line GitHub anchored it to) —
+      // the caller resolves that back to evidence text via the CURRENT
+      // diff's anchor index, since the evidence is defined as "whatever is
+      // on that line", not a string we need to have stored ourselves.
+      out.push({
+        file: c.path,
+        line: c.line,
+        side: c.side || "RIGHT",
+        reviewerLogin,
+        reviewId: review.id,
+        body: c.body || "",
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * The core re-review pass. Takes newly-drafted findings plus every prior
+ * comment this skill can see, and returns which of the new findings should
+ * actually be posted, which prior ones are still open and unaddressed
+ * (deferred, for visibility only), and which new findings were dropped
+ * because someone already said them.
+ *
+ * `reviewerLogin` is the identity running THIS review. Prior comments from
+ * that same login are re-review history; prior comments from anyone else are
+ * multi-reviewer collisions. Both are suppressed the same way at post time —
+ * they differ only in which section of the summary they end up in.
+ */
+/**
+ * Finds the anchor in the current diff whose content matches the given
+ * evidence text, searching the whole file's anchors on that side rather than
+ * trusting any particular line number. This is what makes fixed/unfixed
+ * detection survive lines shifting above the one being tracked.
+ *
+ * If the exact text moved to a new line (edited elsewhere, reformatted),
+ * this correctly finds it there. If the text is genuinely gone, this
+ * correctly finds nothing -- which is "fixed".
+ */
+function findByContent(anchorIndex, filePath, side, evidenceText) {
+  const f = anchorIndex?.byPath?.get(filePath);
+  if (!f) return null;
+  const target = normalizeForCompare(evidenceText);
+  if (target === "") return null;
+  for (const a of f.anchors.values()) {
+    if (a.side !== side) continue;
+    if (normalizeForCompare(a.content) === target) return a;
+  }
+  return null;
+}
+
+/**
+ * Resolves each prior comment's evidence text against the diff of the
+ * SPECIFIC commit that comment was anchored to -- not a single shared
+ * "prior" diff. On a PR with several past reviews, each review may have
+ * been posted against a different SHA, so there is no one prior diff that's
+ * correct for all of them; the resolver has to be looked up per comment.
+ *
+ * `resolvePriorAnchor(comment) => anchor|null` lets the caller supply
+ * whatever historical-diff source it has (per-commit fetches, a cache, or
+ * nothing at all -- returning null for every comment degrades to the
+ * position-only fallback below, which is weaker but never wrong in a
+ * dangerous direction: it can mistake "shifted but unfixed" for "fixed",
+ * never the reverse, since content that no longer exists anywhere still
+ * fails findByContent).
+ */
+export function classifyPriorFindings({ priorComments, currentAnchorIndex, resolvePriorAnchor, reviewerLogin }) {
+  const stillOpen = [];
+  const seenIdentities = new Set();
+
+  for (const prior of priorComments || []) {
+    // `prior.line` is only meaningful against the SHA that comment was
+    // originally anchored to -- GitHub's own diff view re-anchors comments
+    // as the branch moves, but this library computes anchors fresh per
+    // diff and has no such tracking. Looking `prior.line` straight up in
+    // the CURRENT diff's anchor index is therefore wrong whenever a line
+    // was inserted or removed above it: the number now points at
+    // unrelated content, and "is this evidence still there" silently
+    // checks the wrong line instead of the right one.
+    //
+    // The fix is to resolve prior.line against the diff it was actually
+    // posted on (priorAnchorIndex, when available -- the caller has this
+    // whenever the prior review's own diff can still be computed) to
+    // recover the real evidence text, then search the CURRENT diff for
+    // that text by content rather than by position. Content is what
+    // actually defines "is this still an issue"; the line number was
+    // always just where it happened to be at the time.
+    const priorAnchor = resolvePriorAnchor ? resolvePriorAnchor(prior) : null;
+    const evidenceText = priorAnchor ? priorAnchor.content : null;
+
+    let anchor;
+    if (evidenceText !== null) {
+      anchor = findByContent(currentAnchorIndex, prior.file, prior.side, evidenceText);
+    } else {
+      // No prior-diff context available (e.g. reconstructing from a stored
+      // review with no original diff on hand) -- fall back to a direct
+      // lookup at the stored position. Strictly weaker: it will report a
+      // shifted-but-unfixed line as "fixed" when nothing changed but the
+      // line number. Callers should supply priorAnchorIndex whenever the
+      // prior SHA is knowable, which review-cli.mjs always can.
+      anchor = currentAnchorIndex?.get(prior.file, prior.line, prior.side);
+    }
+
+    const isFixed = !anchor;
+    if (isFixed) continue;
+
+    const identity = `${prior.file}\u0000${normalizeForCompare(anchor.content)}`;
+    seenIdentities.add(identity);
+
+    const isOwn =
+      reviewerLogin &&
+      prior.reviewerLogin &&
+      String(prior.reviewerLogin).toLowerCase() === String(reviewerLogin).toLowerCase();
+
+    stillOpen.push({
+      file: prior.file,
+      line: prior.line,
+      side: prior.side,
+      identity,
+      raisedBy: prior.reviewerLogin,
+      own: !!isOwn,
+      // A minimal excerpt for the summary, not the full rendered comment body.
+      summary: firstLine(prior.body) || "(no summary available)",
+    });
+  }
+
+  return { stillOpen, seenIdentities };
+}
+
+/**
+ * Extracts a human-readable one-liner from a stored comment body for use in
+ * the "still open" summary section. renderFindingBody always puts the
+ * severity/lens/confidence tag on the first non-blank line and the actual
+ * rationale after a blank line -- taking the literal first line would
+ * surface "**Blocker**" with no information in it, which is useless in a
+ * summary whose entire point is letting a human recognize the issue without
+ * re-reading the original review.
+ */
+function firstLine(s) {
+  const lines = String(s || "").split("\n").map((l) => l.trim()).filter((l) => l !== "");
+  // Skip a leading tag line (starts and ends with ** with no other content
+  // between the markers and the separators) -- this matches what
+  // renderFindingBody produces without depending on its exact wording.
+  const isTagLine = (l) => /^\*\*[^*]+\*\*(\s*·.*)?$/.test(l);
+  const content = lines.find((l) => !isTagLine(l));
+  const chosen = content || lines[0] || "";
+  return chosen.slice(0, 140);
+}
+
+/**
+ * Splits freshly-drafted findings into what's actually new versus what
+ * duplicates something already open on the PR — regardless of who raised it
+ * or when. This is the function that makes "single reviewer, re-review after
+ * a fix" and "two reviewers, same issue" behave the same way: both are just
+ * "this identity is already in seenIdentities."
+ */
+export function dropAlreadyRaised(findings, seenIdentities) {
+  const fresh = [];
+  const suppressed = [];
+  for (const f of findings) {
+    if (seenIdentities.has(findingIdentity(f))) suppressed.push(f);
+    else fresh.push(f);
+  }
+  return { fresh, suppressed };
+}
+
+
 
 /**
  * Re-running a review on the same head SHA must not double-post. GitHub has

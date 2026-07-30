@@ -38,6 +38,10 @@ import {
   hasExistingReview,
   assertHeadUnchanged,
   findPendingReview,
+  findingIdentity,
+  extractPriorFindings,
+  classifyPriorFindings,
+  dropAlreadyRaised,
   detectInjectionAttempts,
   planDiffChunks,
 } from "../review-lib.mjs";
@@ -1061,5 +1065,297 @@ describe("pending reviews", () => {
     assert.equal(findPendingReview([], "x"), null);
     assert.equal(findPendingReview(null, "x"), null);
     assert.equal(findPendingReview([{ id: 1, state: "APPROVED", user: { login: "x" } }], "x"), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("re-review — do not re-cover previous comments", () => {
+  // A real two-commit history: first commit has the issue, second "fixes"
+  // one thing and leaves another untouched, shifting line numbers around it
+  // in the process — the scenario that breaks a naive (file, line) match.
+  function makeHistory() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rereview-"));
+    const git = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" });
+    git("init", "-q"); git("config", "user.email", "t@t.t"); git("config", "user.name", "t");
+    fs.writeFileSync(path.join(dir, "app.ts"), [
+      "const start = 1;",
+      "console.log('debug');",
+      "const config = { url: 'http://insecure.example.com' };",
+      "const end = 1;",
+    ].join("\n") + "\n");
+    git("add", "-A"); git("commit", "-qm", "v1");
+    const v1Sha = git("rev-parse", "HEAD").trim();
+
+    // v2: an unrelated line added above (shifts everything below it down by
+    // one), the insecure URL is STILL there untouched, console.log untouched.
+    fs.writeFileSync(path.join(dir, "app.ts"), [
+      "const start = 1;",
+      "const inserted = true;",
+      "console.log('debug');",
+      "const config = { url: 'http://insecure.example.com' };",
+      "const end = 1;",
+    ].join("\n") + "\n");
+    git("add", "-A"); git("commit", "-qm", "v2 — added a line, did not fix anything");
+    const v2Diff = git("diff", "--no-color", `${v1Sha}..HEAD`);
+
+    // v3: NOW the insecure URL is actually fixed, console.log remains.
+    fs.writeFileSync(path.join(dir, "app.ts"), [
+      "const start = 1;",
+      "const inserted = true;",
+      "console.log('debug');",
+      "const config = { url: 'https://secure.example.com' };",
+      "const end = 1;",
+    ].join("\n") + "\n");
+    git("add", "-A"); git("commit", "-qm", "v3 — fixed the URL");
+    const v3Diff = git("diff", "--no-color", `${v1Sha}..HEAD`);
+
+    fs.rmSync(dir, { recursive: true, force: true });
+    // v1 as a "diff" against an empty tree -- what the ORIGINAL review was
+    // posted against, giving classifyPriorFindings real content to resolve
+    // prior.line into, rather than the no-context fallback.
+    const v1Diff = [
+      "diff --git a/app.ts b/app.ts",
+      "--- /dev/null", "+++ b/app.ts",
+      "@@ -0,0 +1,4 @@",
+      "+const start = 1;",
+      "+console.log('debug');",
+      "+const config = { url: 'http://insecure.example.com' };",
+      "+const end = 1;",
+      "",
+    ].join("\n");
+    return { v1Diff, v2Diff, v3Diff };
+  }
+
+  test("single reviewer, dev pushes and re-review runs: fixed item is not re-raised, unfixed item is deferred not reposted", () => {
+    const { v1Diff, v2Diff } = makeHistory();
+    const filesAtV2 = parseUnifiedDiff(v2Diff);
+    const idxV2 = buildAnchorIndex(filesAtV2);
+    const idxV1 = buildAnchorIndex(parseUnifiedDiff(v1Diff));
+
+    // What review-pr posted the FIRST time, at the original lines.
+    const priorComments = extractPriorFindings([
+      {
+        id: 1,
+        user: { login: "gautham248" },
+        comments: [
+          { path: "app.ts", line: 2, side: "RIGHT", body: "**Should** · `coding-standards`\n\nRemove leftover console.log." },
+          { path: "app.ts", line: 3, side: "RIGHT", body: "**Blocker** · `coding-standards`\n\nInsecure http:// URL." },
+        ],
+      },
+    ]);
+
+    // Neither prior finding was "fixed" in v2 — an unrelated line was
+    // inserted above both, shifting them to lines 3 and 4. A naive
+    // (file, line) match would think both vanished. Evidence-based match
+    // must still find both as open.
+    const { stillOpen } = classifyPriorFindings({
+      priorComments, currentAnchorIndex: idxV2, resolvePriorAnchor: (p) => idxV1.get(p.file, p.line, p.side), reviewerLogin: "gautham248",
+    });
+    assert.equal(stillOpen.length, 2, "both prior findings are still open despite the line shift");
+    assert.ok(stillOpen.every((s) => s.own), "both were raised by this same reviewer");
+
+    // A fresh pass over v2 re-derives the same two findings independently
+    // (different line numbers now, same evidence).
+    const freshFindings = [
+      makeFinding({ lens: "coding-standards", file: "app.ts", line: 3, evidence: "console.log('debug');", severity: "should" }),
+      makeFinding({ lens: "coding-standards", file: "app.ts", line: 4, evidence: "const config = { url: 'http://insecure.example.com' };", severity: "blocker" }),
+    ];
+    const seen = new Set(stillOpen.map((s) => s.identity));
+    const { fresh, suppressed } = dropAlreadyRaised(freshFindings, seen);
+
+    assert.equal(fresh.length, 0, "nothing new to post — both are repeats of what was already said");
+    assert.equal(suppressed.length, 2, "both suppressed as duplicates of open prior comments");
+  });
+
+  test("the fix actually lands: fixed finding drops out, unfixed finding survives as deferred", () => {
+    const { v1Diff, v3Diff } = makeHistory();
+    const filesAtV3 = parseUnifiedDiff(v3Diff);
+    const idxV3 = buildAnchorIndex(filesAtV3);
+    const idxV1 = buildAnchorIndex(parseUnifiedDiff(v1Diff));
+
+    const priorComments = extractPriorFindings([
+      {
+        id: 1, user: { login: "gautham248" },
+        comments: [
+          // These are the ORIGINAL lines as posted against v1 (before the
+          // "const inserted" line existed). classifyPriorFindings must not
+          // assume the line number is still valid at v3 -- it has shifted
+          // by one for both, and the URL line's content has also changed.
+          // If this test used v3's current line numbers directly it would
+          // not be testing anything: the line-shift IS the scenario.
+          { path: "app.ts", line: 2, side: "RIGHT", body: "**Should**\n\nRemove leftover console.log." },
+          { path: "app.ts", line: 3, side: "RIGHT", body: "**Blocker**\n\nInsecure http:// URL." },
+        ],
+      },
+    ]);
+
+    const { stillOpen } = classifyPriorFindings({
+      priorComments, currentAnchorIndex: idxV3, resolvePriorAnchor: (p) => idxV1.get(p.file, p.line, p.side), reviewerLogin: "gautham248",
+    });
+
+    // The URL line changed content (http -> https) at that anchor position,
+    // so its normalized evidence no longer matches -> correctly falls out.
+    // console.log is untouched -> correctly remains.
+    assert.equal(stillOpen.length, 1, "only the unfixed item remains open");
+    assert.match(stillOpen[0].summary, /console\.log/);
+  });
+
+  test("dev forgets an issue entirely: it is flagged in the summary, not silently dropped, and not reposted as a new comment", () => {
+    const stillOpen = [
+      { file: "app.ts", line: 4, side: "RIGHT", identity: "x", raisedBy: "gautham248", own: true, summary: "Insecure http:// URL." },
+    ];
+    const body = renderSummary({
+      findings: [], stillOpen, suppressedDuplicates: [],
+      lensReport: { selected: [], skipped: [], notApplicable: [] },
+      prMeta: { repo: "o/r", number: 17, changedFiles: 1 },
+    });
+    assert.match(body, /previously-raised item\(s\) still open/);
+    assert.match(body, /not re-posted, flagging for visibility/);
+    assert.match(body, /Insecure http:\/\/ URL\./);
+    // Must not appear as if it were posted inline this round.
+    assert.equal(/^should.*app\.ts:4/m.test(body), false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("multi-reviewer — the same issue is not reviewed twice", () => {
+  test("a second reviewer's fresh finding is suppressed if a first reviewer already raised it", () => {
+    const diff = [
+      "diff --git a/a.ts b/a.ts", "--- a/a.ts", "+++ b/a.ts",
+      "@@ -1,2 +1,2 @@", " const x = 0;", "-const y = 1;", "+const y = eval(input);",
+      "",
+    ].join("\n");
+    const idx = buildAnchorIndex(parseUnifiedDiff(diff));
+
+    const priorComments = extractPriorFindings([
+      {
+        id: 1, user: { login: "adhil" },
+        comments: [{ path: "a.ts", line: 2, side: "RIGHT", body: "**Blocker**\n\neval on user input." }],
+      },
+    ]);
+
+    const { stillOpen } = classifyPriorFindings({
+      priorComments, currentAnchorIndex: idx, reviewerLogin: "gautham248",
+    });
+    assert.equal(stillOpen.length, 1);
+    assert.equal(stillOpen[0].own, false, "raised by a DIFFERENT reviewer");
+    assert.equal(stillOpen[0].raisedBy, "adhil");
+
+    // gautham248 runs review-pr independently and lands on the same line.
+    const secondPassFinding = makeFinding({ file: "a.ts", line: 2, evidence: "const y = eval(input);", severity: "blocker" });
+    const seen = new Set(stillOpen.map((s) => s.identity));
+    const { fresh, suppressed } = dropAlreadyRaised([secondPassFinding], seen);
+    assert.equal(fresh.length, 0, "not reposted — someone already said it");
+    assert.equal(suppressed.length, 1);
+  });
+
+  test("summary attributes a suppressed-elsewhere item to the reviewer who actually raised it", () => {
+    const stillOpen = [
+      { file: "a.ts", line: 2, side: "RIGHT", identity: "x", raisedBy: "adhil", own: false, summary: "eval on user input." },
+    ];
+    const body = renderSummary({
+      findings: [], stillOpen, suppressedDuplicates: [],
+      lensReport: { selected: [], skipped: [], notApplicable: [] },
+      prMeta: { repo: "o/r", number: 17, changedFiles: 1 },
+    });
+    assert.match(body, /Raised by another reviewer/);
+    assert.match(body, /@adhil/);
+  });
+
+  test("two different reviewers on two genuinely different lines both post — no false suppression", () => {
+    const diff = [
+      "diff --git a/a.ts b/a.ts", "--- a/a.ts", "+++ b/a.ts",
+      "@@ -1,3 +1,3 @@", " const x = 0;", "-const y = 1;", "+const y = eval(input);", " const z = safe();",
+      "",
+    ].join("\n");
+    const idx = buildAnchorIndex(parseUnifiedDiff(diff));
+    const priorComments = extractPriorFindings([
+      { id: 1, user: { login: "adhil" }, comments: [{ path: "a.ts", line: 1, side: "RIGHT", body: "Nit\n\nUnrelated naming nit on line 1." }] },
+    ]);
+    const { stillOpen } = classifyPriorFindings({ priorComments, currentAnchorIndex: idx, reviewerLogin: "gautham248" });
+    const seen = new Set(stillOpen.map((s) => s.identity));
+    const newFinding = makeFinding({ file: "a.ts", line: 2, evidence: "const y = eval(input);", severity: "blocker" });
+    const { fresh, suppressed } = dropAlreadyRaised([newFinding], seen);
+    assert.equal(fresh.length, 1, "a genuinely different finding is not suppressed by an unrelated prior comment");
+    assert.equal(suppressed.length, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("findingIdentity and extractPriorFindings — plumbing", () => {
+  test("identity ignores whitespace differences in evidence", () => {
+    const a = findingIdentity(makeFinding({ evidence: "const x = 1;" }));
+    const b = findingIdentity(makeFinding({ evidence: "  const   x = 1;  " }));
+    assert.equal(a, b);
+  });
+
+  test("identity is file-scoped — same evidence text in two files is not the same finding", () => {
+    const a = findingIdentity(makeFinding({ file: "a.ts", evidence: "const x = 1;" }));
+    const b = findingIdentity(makeFinding({ file: "b.ts", evidence: "const x = 1;" }));
+    assert.notEqual(a, b);
+  });
+
+  test("extractPriorFindings tolerates reviews with no comments array, and non-comment reviews", () => {
+    assert.deepEqual(extractPriorFindings([{ id: 1, user: { login: "x" } }]), []);
+    assert.deepEqual(extractPriorFindings([]), []);
+    assert.deepEqual(extractPriorFindings(null), []);
+  });
+
+  test("extractPriorFindings skips malformed comment entries rather than crashing", () => {
+    const out = extractPriorFindings([
+      { id: 1, user: { login: "x" }, comments: [{ path: "a.ts" /* no line */ }, null, { path: "b.ts", line: 3 }] },
+    ]);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].file, "b.ts");
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("content-based matching — the known limitation", () => {
+  test("duplicate identical lines: content match can pick the wrong occurrence — documented, not silently wrong", () => {
+    // Two lines with identical content. Content-based matching cannot tell
+    // them apart by position; it will match whichever occurrence is found
+    // first. This is a real, accepted limitation -- not a crash, and not
+    // silent data loss (the finding is still correctly recognized as
+    // "still present somewhere in this file"), but worth a named test so a
+    // future change to findByContent has a regression guard either way.
+    const priorDiff = [
+      "diff --git a/a.ts b/a.ts", "--- /dev/null", "+++ b/a.ts",
+      "@@ -0,0 +1,3 @@", "+const x = 1;", "+console.log('dup');", "+console.log('dup');",
+      "",
+    ].join("\n");
+    const currentDiff = [
+      "diff --git a/a.ts b/a.ts", "--- a/a.ts", "+++ b/a.ts",
+      "@@ -1,3 +1,3 @@", " const x = 1;", " console.log('dup');", " console.log('dup');",
+      "",
+    ].join("\n");
+    const priorIdx = buildAnchorIndex(parseUnifiedDiff(priorDiff));
+    const currentIdx = buildAnchorIndex(parseUnifiedDiff(currentDiff));
+    const priorComments = extractPriorFindings([
+      { id: 1, user: { login: "gautham248" }, comments: [{ path: "a.ts", line: 2, side: "RIGHT", body: "Nit\n\nDuplicate console.log #1." }] },
+    ]);
+    const { stillOpen } = classifyPriorFindings({
+      priorComments, currentAnchorIndex: currentIdx, resolvePriorAnchor: (p) => priorIdx.get(p.file, p.line, p.side), reviewerLogin: "gautham248",
+    });
+    // Still correctly recognized as open (not falsely "fixed") -- the exact
+    // line picked among duplicates is not guaranteed, and that's the
+    // documented limitation, not a crash or silent loss.
+    assert.equal(stillOpen.length, 1);
+  });
+
+  test("without priorAnchorIndex, falls back to position lookup (weaker, but does not crash)", () => {
+    const diff = [
+      "diff --git a/a.ts b/a.ts", "--- a/a.ts", "+++ b/a.ts",
+      "@@ -1,2 +1,2 @@", " const x = 0;", "-const y = 1;", "+const y = 2;",
+      "",
+    ].join("\n");
+    const idx = buildAnchorIndex(parseUnifiedDiff(diff));
+    const priorComments = extractPriorFindings([
+      { id: 1, user: { login: "gautham248" }, comments: [{ path: "a.ts", line: 2, side: "RIGHT", body: "Nit\n\nSomething." }] },
+    ]);
+    const { stillOpen } = classifyPriorFindings({
+      priorComments, currentAnchorIndex: idx, reviewerLogin: "gautham248", // no resolvePriorAnchor supplied
+    });
+    assert.equal(stillOpen.length, 1, "position fallback still finds SOMETHING at that line, does not throw");
   });
 });
