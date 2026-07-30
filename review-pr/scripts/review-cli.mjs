@@ -31,6 +31,9 @@ import {
   hasExistingReview,
   assertHeadUnchanged,
   findPendingReview,
+  extractPriorFindings,
+  classifyPriorFindings,
+  dropAlreadyRaised,
   detectInjectionAttempts,
   loadRepoConventions,
   planDiffChunks,
@@ -249,6 +252,8 @@ function cmdPost(a) {
   let prAuthor = a["pr-author"];
   let currentSha = a["head-sha"];
   let existingReviews = [];
+  let priorComments = [];
+  let resolvePriorAnchorFn = null;
 
   if (!dryRun) {
     let meta;
@@ -284,6 +289,69 @@ function cmdPost(a) {
         `Or on GitHub: open the PR and use "Cancel review" at the end of the Conversation tab.`
       );
     }
+
+    // --- Re-review + multi-reviewer dedup ---
+    //
+    // Pull every line comment from every SUBMITTED review on this PR (the
+    // reviews-list endpoint above returns review objects but not their
+    // comments -- GitHub keeps comments on a separate endpoint). PENDING
+    // reviews other than the caller's own are intentionally excluded: a
+    // still-drafting reviewer's unsubmitted comments are not "already
+    // raised" from the PR's point of view.
+    try {
+      const allComments = JSON.parse(
+        gh(["api", `repos/${repo}/pulls/${pr}/comments`, "--paginate"])
+      );
+      const byReview = new Map();
+      for (const c of allComments) {
+        if (!c || !c.pull_request_review_id) continue;
+        const list = byReview.get(c.pull_request_review_id) || [];
+        list.push(c);
+        byReview.set(c.pull_request_review_id, list);
+      }
+      const submittedReviews = existingReviews.filter((r) => r.state !== "PENDING");
+      const priorReviewObjs = submittedReviews.map((r) => ({
+        id: r.id,
+        user: r.user,
+        comments: (byReview.get(r.id) || []).map((c) => ({
+          path: c.path, line: c.line ?? c.original_line, side: c.side || "RIGHT", body: c.body,
+        })),
+      }));
+      // Track which review each comment came from so its commit SHA can be
+      // recovered later -- extractPriorFindings drops the pull_request_id
+      // linkage on purpose (it only knows about "a review", not GitHub's
+      // wire format), so the SHA is looked up by review id here instead.
+      const shaByReviewId = new Map(submittedReviews.map((r) => [r.id, r.commit_id]));
+      priorComments = extractPriorFindings(priorReviewObjs);
+
+      // Each review's comments were anchored against THAT review's commit,
+      // not the current one, and different reviews on the same PR can sit
+      // at different commits -- so there is no single "prior diff" to
+      // build once. Fetch each distinct historical commit's diff lazily,
+      // on first use, and cache it.
+      const priorDiffCache = new Map();
+      const diffForSha = (sha) => {
+        if (priorDiffCache.has(sha)) return priorDiffCache.get(sha);
+        let idx = null;
+        try {
+          const d = gh(["api", `repos/${repo}/commits/${sha}`, "-H", "Accept: application/vnd.github.v3.diff"]);
+          idx = buildAnchorIndex(parseUnifiedDiff(d));
+        } catch { /* leaves idx null; resolvePriorAnchor below degrades per-comment */ }
+        priorDiffCache.set(sha, idx);
+        return idx;
+      };
+      resolvePriorAnchorFn = (prior) => {
+        const sha = shaByReviewId.get(prior.reviewId);
+        const idx = sha ? diffForSha(sha) : null;
+        return idx ? idx.get(prior.file, prior.line, prior.side) : null;
+      };
+    } catch (e) {
+      // Non-fatal by design: if history can't be reconstructed, the review
+      // still runs -- it just cannot suppress prior findings, which fails
+      // toward "says something twice" rather than toward silently skipping
+      // a review the tool could not actually verify.
+      console.error(`⚠ could not reconstruct prior review history: ${e.message || e}. Continuing without re-review dedup.`);
+    }
   }
 
   let reviewer = a.reviewer;
@@ -297,7 +365,25 @@ function cmdPost(a) {
   // sees them at all.
   const pending = a.publish !== true;
 
-  const hasBlockers = post.some((f) => f.severity === "blocker");
+  // --- Re-review / multi-reviewer dedup ---
+  //
+  // `post` at this point is every validated, deduped, confidence-gated
+  // finding from THIS pass -- with no knowledge yet of what earlier
+  // reviews (by this reviewer or anyone else) already said. Cross-check
+  // against priorComments (fetched above, empty in --dry-run or on a PR
+  // with no review history) before deciding what actually gets posted.
+  const currentAnchorIndex = buildAnchorIndex(files);
+  const { stillOpen } = classifyPriorFindings({
+    priorComments,
+    currentAnchorIndex,
+    resolvePriorAnchor: resolvePriorAnchorFn,
+    reviewerLogin: reviewer,
+  });
+  const alreadySeenIdentities = new Set(stillOpen.map((s) => s.identity));
+  const { fresh: postAfterDedup, suppressed: suppressedDuplicates } =
+    dropAlreadyRaised(post, alreadySeenIdentities);
+
+  const hasBlockers = postAfterDedup.some((f) => f.severity === "blocker");
   const eventDecision = resolveReviewEvent({
     pending,
     prAuthor,
@@ -308,7 +394,7 @@ function cmdPost(a) {
 
   const maxFindings = a["max-findings"] ? Number(a["max-findings"]) : DEFAULT_MAX_FINDINGS;
   const { payload: draft, truncated } = buildReviewPayload({
-    findings: post, summary: "", commitId: currentSha, event: eventDecision.event, maxFindings,
+    findings: postAfterDedup, summary: "", commitId: currentSha, event: eventDecision.event, maxFindings,
   });
 
   // The lens report is produced by `plan`, not here. Pass `--plan <file>`
@@ -334,7 +420,8 @@ function cmdPost(a) {
 
   const summary =
     renderSummary({
-      findings: post, unanchorable: [], held, truncated,
+      findings: postAfterDedup, unanchorable: [], held, truncated,
+      stillOpen, suppressedDuplicates,
       lensReport,
       prMeta: { repo, number: pr, changedFiles: files.length },
       eventDecision,
@@ -347,6 +434,12 @@ function cmdPost(a) {
     console.log(`  mode:     ${pending ? "PENDING (visible only to you until submitted)" : "PUBLISH immediately"}`);
     console.log(`  event:    ${payload.event ?? "(omitted — this is what makes it PENDING)"}`);
     console.log(`  reason:   ${eventDecision.reason}`);
+    if (suppressedDuplicates.length) {
+      console.log(`  skipped:  ${suppressedDuplicates.length} finding(s) already raised (this reviewer or another) — see summary`);
+    }
+    if (stillOpen.length) {
+      console.log(`  deferred: ${stillOpen.length} prior finding(s) still open, not reposted — see summary`);
+    }
     console.log(`  comments: ${payload.comments.length}${truncated.length ? ` (+${truncated.length} in summary)` : ""}`);
     console.log(`  held:     ${held.length}\n`);
     console.log(JSON.stringify(payload, null, 2));
@@ -364,6 +457,12 @@ function cmdPost(a) {
       console.log(`✓ PENDING review created — nothing is visible to anyone else yet.`);
       console.log(`  review id: ${parsed.id}   state: ${parsed.state}`);
       console.log(`  comments:  ${payload.comments.length}   held: ${held.length}`);
+      if (suppressedDuplicates.length) {
+        console.log(`  skipped:   ${suppressedDuplicates.length} finding(s) already raised — see summary`);
+      }
+      if (stillOpen.length) {
+        console.log(`  deferred:  ${stillOpen.length} prior finding(s) still open, not reposted — see summary`);
+      }
       console.log(``);
       console.log(`  Review it in GitHub against the real diff:`);
       console.log(`    https://github.com/${repo}/pull/${pr}/files`);
@@ -378,6 +477,12 @@ function cmdPost(a) {
       console.log(`  event:    ${payload.event} (${eventDecision.reason})`);
       console.log(`  comments: ${payload.comments.length}`);
       console.log(`  held:     ${held.length}`);
+      if (suppressedDuplicates.length) {
+        console.log(`  skipped:  ${suppressedDuplicates.length} finding(s) already raised — see summary`);
+      }
+      if (stillOpen.length) {
+        console.log(`  deferred: ${stillOpen.length} prior finding(s) still open, not reposted — see summary`);
+      }
     }
   } catch (e) {
     const err = String(e.stderr || e.message);
