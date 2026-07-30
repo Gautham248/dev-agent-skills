@@ -1,0 +1,28 @@
+{
+  "_comment": "The set of skills review-pr reads and applies as review perspectives. THIS IS THE FILE TO EDIT when a new standard should influence PR review -- adding a lens is one entry here, never a rewrite of SKILL.md. Two entry shapes exist. (1) A direct entry names one skill: {skill, concern, applies_to, requires_domain, order, enabled}. (2) An 'expand_from' entry names a dispatcher skill and derives one lens per domain in that skill's own references/manifest.json -- path_patterns become applies_to and the domain name becomes requires_domain. Use expand_from for coding-standards so a new coding-standards-* sub-skill added to manifest.json becomes a review lens with no edit here at all; that manifest is already the place that list lives, and duplicating it here would guarantee the two drift. 'applies_to' gates a lens on the PR's changed paths (bare substrings like '.tsx' or 'src/routes/api/' match the same way manifest.json's path_patterns do; '*' and '**' globs also work). 'requires_domain' gates it on what the target repo actually contains, so a database standard never fires on a repo with no database. 'always: true' overrides path gating for lenses that should read every PR regardless of file type. 'order' controls pass sequence -- first-principles-review runs first on purpose: that skill's own guidance is that if a change is wrong in its premises, convention nits do not matter. Set 'enabled': false to park a lens without deleting it. A malformed entry is skipped and reported in the review summary; malformed JSON in this file aborts the review outright rather than silently reviewing against zero standards.",
+  "version": 1,
+  "lenses": [
+    {
+      "skill": "first-principles-review",
+      "concern": "premises, assumptions, blast radius, rollback",
+      "always": true,
+      "order": 10
+    },
+    {
+      "expand_from": "coding-standards",
+      "order": 20
+    },
+    {
+      "skill": "typescript-conventions",
+      "concern": "generic TypeScript idiom",
+      "applies_to": [".ts", ".tsx", ".mts", ".cts"],
+      "order": 60
+    },
+    {
+      "skill": "webapp-conventions",
+      "concern": "web platform behaviour",
+      "applies_to": [".ts", ".tsx", ".jsx", ".svelte", ".vue", ".astro"],
+      "order": 70
+    }
+  ]
+}

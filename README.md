@@ -22,6 +22,7 @@ in your AI IDE instantly.
 | [`graphify`](./graphify/) | Use for any question about a codebase, its architecture, file relationships, or project content — especially… |
 | [`investigate-issue`](./investigate-issue/) | Use when a developer points at an existing GitHub issue and wants it investigated and taken forward — phrases… |
 | [`plan-feature`](./plan-feature/) | Use when a developer wants to plan a new feature before building it — phrases like "plan this feature", "writ… |
+| [`review-pr`](./review-pr/) | Review a GitHub pull request you have been asked or assigned to review, and post the review back to GitHub as… |
 | [`skill-add`](./skill-add/) | Use when the user wants to add, import, or install a new external skill from a git repository — phrases like… |
 | [`skill-factory`](./skill-factory/) | Interviews the requester through a structured clarification protocol, then designs, writes, and validates a n… |
 | [`skill-update`](./skill-update/) | Use when the user wants to update, refresh, sync, or pull the latest version of one or all tracked external s… |
@@ -102,17 +103,44 @@ directory automatically. Run it again after pulling new skills.
 In your AI IDE, from inside any repo:
 
 ```
-/fix-bug        /plan-feature     /first-principles-review
-/sync-prs       /skill-add        /skill-update
-/graphify       /typescript-conventions
-/webapp-conventions               /eslint-rule-author
+/fix-bug            /plan-feature       /investigate-issue
+/review-pr          /sync-prs           /first-principles-review
+/coding-standards   /graphify           /eslint-rule-author
+/skill-add          /skill-update       /skill-factory
+/typescript-conventions                 /webapp-conventions
 ```
+
+`coding-standards` dispatches to its seven `coding-standards-*` domain
+sub-skills automatically — you invoke the dispatcher, not the sub-skills.
 
 Or describe what you want naturally — the agent will load the right skill.
 
 **First question?** The agent automatically checks for a knowledge graph
 (`graphify-out/graph.json`), builds it if missing (auto-installing
 `graphifyy` if needed), and uses it to ground every answer.
+
+## Security scanning
+
+Skill files are executable instructions for an agent, so a skill imported from
+an outside repository is untrusted input in the same way a dependency is. The
+repo ships a scanner for exactly this:
+
+```bash
+bash setup.sh --check-security
+```
+
+It scans every skill for remote-execution patterns, instruction-hijacking
+phrasing, credential handling, hidden Unicode, and shortened links, then exits
+non-zero if anything blocking is found — so it drops straight into CI:
+
+```yaml
+- run: bash setup.sh --check-security
+```
+
+`skill-add` runs it automatically on anything it imports. Run it by hand after
+pulling changes you didn't write. See
+[docs/06-REFERENCE.md](./docs/06-REFERENCE.md#bash-setupsh---check-security)
+for the full rule list.
 
 ## Manual install (if setup.sh doesn't cover your IDE)
 

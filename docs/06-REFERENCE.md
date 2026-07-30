@@ -19,7 +19,53 @@ Run from the `dev-agent-skills` root after cloning, after `git pull`, after addi
 4. Regenerates the README skills table
 5. Symlinks skills into detected harnesses
 
-**No flags.** It detects everything automatically.
+**One flag:** `--check-security` (below). With no flag it detects everything automatically.
+
+---
+
+### `bash setup.sh --check-security`
+
+Runs the skill-security scanner and exits — it does **not** inject protocols, symlink, or modify anything. Read-only and the intended CI entry point.
+
+`bash setup.sh --check-security` (no path) must be run from the repo root, same as plain `bash setup.sh`. Invoked with a path instead -- `bash /path/to/dev-agent-skills/setup.sh --check-security` -- it resolves its own location and works from anywhere; it does not depend on the current working directory, only on how it's invoked.
+
+Requires Node.js. Delegates to `skill-add/scripts/scan-skillset.mjs`.
+
+**Exit codes:**
+
+| Code | Meaning |
+|---|---|
+| `0` | No blocking findings. Non-blocking (`medium`) findings may still be printed. |
+| `1` | At least one `critical` or `high` finding, or Node.js is not installed. |
+
+**Rules:**
+
+| ID | Severity | Category | Detects |
+|---|---|---|---|
+| `SEC-EXEC-001` | critical | Remote execution | `curl … \| sh` |
+| `SEC-EXEC-002` | critical | Remote execution | `wget … \| sh` |
+| `SEC-EXEC-003` | critical | Remote execution | `base64 -d … \| sh` |
+| `SEC-EXEC-004` | high | Remote execution | `npm install -g` with a non-literal target |
+| `SEC-INJECT-001` | high | Instruction hijacking | Instruction-override phrasing |
+| `SEC-INJECT-002` | high | Instruction hijacking | Privilege/role reframing |
+| `SEC-INJECT-003` | medium | Instruction hijacking | Instructing the agent to conceal an action |
+| `SEC-CRED-001` | high | Credential exfiltration | A live bearer token embedded in an outbound request |
+| `SEC-CRED-002` | high | Credential exfiltration | `.env` piped toward a network tool |
+| `SEC-UNICODE-001` | medium | Hidden content | Zero-width / bidirectional-control characters |
+| `SEC-URL-001` | medium | Suspicious link | URL-shortener links |
+| `SEC-STRUCT-001` | medium | Structural | A script framed as required *before* the skill states its purpose |
+
+`SEC-STRUCT-001` is the subtle one. It targets the front-loaded-inducement pattern — a helper script presented as a mandatory first step, placed above the skill's own stated purpose, so an agent runs it before evaluating whether the skill is even relevant. The rule looks for *script execution* framed that way, not the phrasing alone, and this repo's own injected protocol blocks are stripped before the check runs so they never trigger it.
+
+**Writing a skill that legitimately needs a flagged pattern:** build the string at runtime from fragments rather than writing it literally. `review-pr/scripts/review-lib.mjs` does this for its own injection-detection patterns, and `review-pr/scripts/tests/` does it for the test fixtures — both would otherwise flag themselves as true-but-useless positives.
+
+```bash
+# CI
+bash setup.sh --check-security
+
+# After pulling changes you didn't write
+git pull && bash setup.sh --check-security && bash setup.sh
+```
 
 ---
 
@@ -238,6 +284,51 @@ Only relevant if you're writing or maintaining a master/dispatcher skill (see [`
 | `depends_on` | Other domain names this one structurally requires (e.g. a client-side query library needs `frontend`) |
 
 **This file is dispatcher-only by convention, not by permission enforcement:** no sub-skill's `SKILL.md` references it, so a sub-skill genuinely has no way to discover it exists. Keep it that way — don't add a reference to it from any dispatched skill.
+
+---
+
+### `review-pr/references/lens-registry.json` schema
+
+The list of skills `review-pr` reads as review perspectives. Edit this to add a standard to PR review.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `version` | number | no | Registry format version. |
+| `lenses` | array | **yes** | Lens entries. A non-array or malformed JSON aborts the review rather than reviewing against zero standards. |
+
+**Direct entry:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `skill` | string | **yes** | Skill folder name. Validated against `^[a-z0-9][a-z0-9._-]*$`; traversal and absolute paths are rejected. |
+| `concern` | string | no | One-line description shown in the review summary. |
+| `applies_to` | string[] | no | Path gate. Bare substrings (`.tsx`, `src/routes/api/`) match as in `manifest.json`'s `path_patterns`; `*` and `**` globs also work. Empty means unconditional. |
+| `requires_domain` | string[] | no | Stack gate — lens runs only if the target repo has one of these domains. |
+| `always` | boolean | no | `true` overrides path gating entirely. |
+| `order` | number | no | Pass order. Default `100`. |
+| `enabled` | boolean | no | `false` parks a lens without deleting it. |
+
+**Expansion entry:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `expand_from` | string | **yes** | A dispatcher skill. Reads that skill's `references/manifest.json` and yields one lens per domain: `path_patterns` become `applies_to`, the domain name becomes `requires_domain`. |
+| `order` | number | no | Base order; each derived lens gets `order + index`. |
+
+```jsonc
+{
+  "version": 1,
+  "lenses": [
+    { "skill": "first-principles-review", "always": true, "order": 10 },
+    { "expand_from": "coding-standards", "order": 20 },
+    { "skill": "typescript-conventions", "applies_to": [".ts", ".tsx"], "order": 60 }
+  ]
+}
+```
+
+**Failure behaviour:** a malformed *entry* is skipped and named in the review summary; malformed *JSON* aborts the review. The asymmetry is deliberate — a partial lens set is recoverable and visible, an unknown one is neither.
+
+**Related:** repo-specific rules live in the **target** repo at `.dev-agent/review-conventions.md`, under a `## Promoted` heading (applied) and a `## Candidates` heading (recorded, never applied until promoted).
 
 ---
 
