@@ -247,6 +247,67 @@ renamed or removed without updating the registry — the review still runs, but
 applies fewer standards than the registry claims, which is exactly the drift
 this check exists to catch.
 
+### 9. `fix-bug` fix-attempt ledger — a rejected hypothesis is actually caught
+
+```bash
+# In any scratch directory -- this does not touch a real repo
+mkdir -p /tmp/ledger-check && cd /tmp/ledger-check
+
+# Record a rejected attempt
+node <path-to-dev-agent-skills>/fix-bug/scripts/ledger-cli.mjs record \
+  --repo-root . --description "test bug" \
+  --hypothesis "a plausible sounding fix idea" \
+  --diff-summary "file.ts:1" --outcome rejected --feedback "confirmed wrong by testing"
+
+# Re-check the SAME hypothesis -- must be caught
+node <path-to-dev-agent-skills>/fix-bug/scripts/ledger-cli.mjs check \
+  --repo-root . --description "test bug" \
+  --hypothesis "a plausible sounding fix idea"
+echo "exit=$?"
+# expected: "KNOWN DEAD END", exit=2, and the recorded feedback text printed back
+```
+
+```bash
+node --test fix-bug/scripts/tests/ledger-lib.test.mjs
+# expected: "# fail 0"
+```
+
+If `check` exits `0` on a hypothesis that should match a prior `rejected`
+attempt, the matcher missed it — compare the wording against
+`fix-bug/references/fix-attempt-ledger.md`'s two-layer matching (substring,
+then word-overlap ratio) before assuming it's a bug; a hypothesis worded
+completely differently from the original is not expected to match.
+
+### 10. Shared circuit breaker — trips at the right turn, not one early or late
+
+```bash
+cd /tmp/ledger-check   # any scratch directory
+
+CB=<path-to-dev-agent-skills>/scripts/circuit-breaker-cli.mjs
+for i in 1 2 3 4 5; do
+  node $CB check --repo-root . --session-id "doc-verify" --job-type sync-prs-ci-remediation --input "attempt $i"
+  node $CB record --repo-root . --session-id "doc-verify" --input "attempt $i" --token-delta 1000 --pass-fail false
+done
+# all 5 should print "✓ Turn N is allowed"
+
+node $CB check --repo-root . --session-id "doc-verify" --job-type sync-prs-ci-remediation --input "attempt 6"
+echo "exit=$?"
+# expected: exit=1, "Circuit breaker tripped ... turn 6 would exceed turn_limit 5"
+```
+
+```bash
+node --test scripts/tests/circuit-breaker.test.mjs
+# expected: "# fail 0"
+```
+
+**Session isolation is the property most worth re-checking after any change
+to this file:** run the loop above under two different `--session-id`
+values and confirm `show --session-id <the first one>` still reports its
+own turn count unaffected by the second session tripping. A regression here
+means one PR's runaway remediation could silently consume another PR's
+budget in the same `sync-prs` run — exactly what per-PR session keys exist
+to prevent.
+
 ---
 
 ## Post-import verification checklist
