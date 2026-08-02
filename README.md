@@ -19,6 +19,7 @@ in your AI IDE instantly.
 | [`eslint-rule-author`](./eslint-rule-author/) | Use when authoring or modifying rules in a custom ESLint plugin — adding a new rule, fixing a false positive… |
 | [`first-principles-review`](./first-principles-review/) | Critical, first-principles PR review that enumerates and challenges every assumption the author made, traces… |
 | [`fix-bug`](./fix-bug/) | Use when a developer reports a bug in a GitHub repository and wants an automated fix — phrases like "fix this… |
+| [`generate-tests`](./generate-tests/) | Designs unit, integration, and other tests derived from a function or workflow's actual contract -- boundary… |
 | [`graphify`](./graphify/) | Use for any question about a codebase, its architecture, file relationships, or project content — especially… |
 | [`investigate-issue`](./investigate-issue/) | Use when a developer points at an existing GitHub issue and wants it investigated and taken forward — phrases… |
 | [`plan-feature`](./plan-feature/) | Use when a developer wants to plan a new feature before building it — phrases like "plan this feature", "writ… |
