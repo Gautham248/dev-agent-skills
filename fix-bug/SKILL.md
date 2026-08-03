@@ -504,6 +504,16 @@ surface correctly regardless, since they carry their own answer/correction
 text — this asymmetry is exactly why only genuine corrections are worth
 recording here, not everything.
 
+**Offer a regression test, once, after the outcome is reported.** If Step
+10 or Step 11 ran (the fix was actually applied — pending attempts that
+were never accepted don't qualify), append one line: "Want me to turn this
+into a permanent regression test?" This is an offer, not an automatic
+action — if the developer says no or doesn't respond to it, drop it and
+move on, don't ask again for this same fix. If they say yes, hand off to
+`generate-tests`, which reads this exact attempt back out of the
+fix-attempt ledger written in Step 9/10 (see `generate-tests/references/ledger-integration.md`)
+rather than needing the bug re-described.
+
 ## Step 13 — If the developer reports back that the fix didn't work
 
 This is a re-entry into the skill, not a fresh bug report — the same issue,
