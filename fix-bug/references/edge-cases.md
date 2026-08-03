@@ -41,3 +41,21 @@ extraction fails with `401 invalid x-api-key`.
 Graphify calls `api.anthropic.com` directly. OpenRouter keys are not accepted.
 Use a native Anthropic API key, or use a Gemini API key (`GEMINI_API_KEY`) from
 Google AI Studio (free tier) instead.
+
+## 2026-07-30 — A pending attempt could be superseded twice, corrupting the ledger
+
+**Condition:** `appendAttempt`'s validation checked whether the target
+attempt's own `outcome` field was `"pending"` before allowing a
+`supersedes` reference. But records are append-only — a superseded
+attempt's outcome field never changes, it stays `"pending"` on disk
+forever. So the check always passed for any attempt that started pending,
+and a second `--supersedes N` call succeeded silently, producing a ledger
+where two different records both claimed to resolve the same attempt
+number.
+
+**Handling:** The correct check scans for an *earlier* record that already
+has `supersedes: N`, not the target record's own outcome field. Found by
+manually running the CLI end-to-end through the exact resolve-then-
+re-resolve sequence, not by the unit tests alone — the original unit tests
+only covered a single supersede per attempt and never exercised a second
+one against the same target. A regression test now covers this explicitly.

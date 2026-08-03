@@ -367,6 +367,23 @@ The script performs 6a–6b automatically. Agents implement fixes in Step 7.
 **Run this step when the user wants CI fixed and/or review comments addressed**
 — including the common phrase "sync my PRs check CI status and fix failures".
 
+**Before the first fix attempt on a given PR, and before every re-attempt
+after that**, check the circuit breaker — this is what bounds item 5's
+"repeat until green," which previously had no limit at all:
+
+```bash
+node ../scripts/circuit-breaker-cli.mjs check --repo-root "$REPO_DIR" \
+  --session-id "pr-<N>-ci-remediation" --job-type sync-prs-ci-remediation \
+  --input "<the CI failure or review thread being addressed this attempt>"
+```
+
+If this trips (exit 1), **stop remediating this PR and report it to the
+user as needing a human** — do not attempt to work around the trip by
+starting a differently-named session or re-running with a larger budget on
+your own initiative. A tripped breaker on a specific PR does not block
+remediation on any other PR in the same sync run; each PR's session is
+independent (`pr-<N>-ci-remediation`, keyed by PR number).
+
 For each PR with `⚠️` CI investigations, `💬` unresolved reviews, or
 `⏳ CI in progress` after a push you just made:
 
@@ -385,8 +402,23 @@ For each PR with `⚠️` CI investigations, `💬` unresolved reviews, or
 4. **Commit hooks** — if a non-merge fix commit is rejected by a local hook,
    resolve per your team's process, then re-commit.
 5. **Re-check** — `gh pr checks <N> --repo <owner/name>` or re-run the sync
-   script. Repeat until green or blocked on something that needs a human
-   (visual-diff approval, merge conflict you cannot resolve, ambiguous review).
+   script. **After each re-check, record the turn** — whether it passed or
+   is still red — then return to the top of this step and check the breaker
+   again before the next attempt:
+
+   ```bash
+   node ../scripts/circuit-breaker-cli.mjs record --repo-root "$REPO_DIR" \
+     --session-id "pr-<N>-ci-remediation" \
+     --input "<what this attempt changed>" \
+     --token-delta <approximate tokens this attempt used, if knowable — 0 if not> \
+     --pass-fail <true if CI is now green, false if still red>
+   ```
+
+   Repeat until green, the breaker trips, or blocked on something that needs
+   a human (visual-diff approval, merge conflict you cannot resolve,
+   ambiguous review) — whichever comes first. A passing re-check (`--pass-fail
+   true`) ends the loop for this PR; there's no need to keep checking the
+   breaker once CI is green.
 
 Do **not** stop after printing investigation proposals when the user asked
 to fix failures.
@@ -424,6 +456,7 @@ CI legend:
 | ✅ green | Every non-visual check is success / neutral / skipped |
 | 🔧 auto-fixed `<category>`, pushed | Auto-fix applied for a known-safe category |
 | ⚠️ N failures need investigation | Listed in detail below the table |
+| 🔴 breaker tripped after N attempts | Step 7 stopped remediating this PR — needs a human, not another auto-fix attempt |
 | ⏳ CI in progress | At least one check is still running — re-run later |
 | (skipped) | Step 5 not attempted because Step 4 ended `⚠️ manual` or `❌ error` |
 
@@ -481,6 +514,7 @@ review/sign/lint step) and re-commit before pushing.
 | CI check in progress on a PR | Skip Step 5 for that PR; record `⏳ CI in progress` |
 | Auto-fix command exits non-zero | Treat as investigate-and-report; do not commit a half-fix |
 | Auto-fix produces an empty diff | Skip commit + push; report as investigation (issue may need manual fix) |
+| Circuit breaker trips during remediation (Step 7) | Stop remediating that PR only; report it as needing a human; continue with other PRs in the same run |
 
 ## What this skill explicitly does NOT do
 
@@ -514,3 +548,8 @@ review/sign/lint step) and re-commit before pushing.
   branch (`branch refs/heads/<headRefName>`), not by path heuristics.
 - The lockfile regeneration step assumes a pnpm project. For npm/yarn,
   override `SYNC_PRS_LINTFIX_CMD` for auto-fix and adapt the regen step.
+
+## See also
+
+- [`../scripts/circuit-breaker.md`](../scripts/circuit-breaker.md) — what
+  the circuit breaker in Step 7 does and why, shared with `fix-bug`

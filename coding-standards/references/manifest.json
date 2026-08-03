@@ -110,7 +110,7 @@
         "a playwright.config.ts file, or a tests/ or e2e/ directory containing *.spec.ts files"
       ],
       "path_patterns": [
-        "tests/", "e2e/", ".spec.ts", "playwright.config"
+        "tests/scenarios/", "tests/fixtures/", "tests/lib/", "tests/global.setup.ts", "e2e/", ".spec.ts", "playwright.config"
       ],
       "dependency_patterns": [
         "@playwright/test"

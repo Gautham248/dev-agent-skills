@@ -332,6 +332,32 @@ The list of skills `review-pr` reads as review perspectives. Edit this to add a 
 
 ---
 
+### `fix-bug/scripts/ledger-cli.mjs` and the fix-attempt ledger
+
+| Command | Purpose |
+|---|---|
+| `check --repo-root <d> --description <text> --hypothesis <text>` | Checks a proposed fix against every prior `rejected` attempt for this bug. Exits non-zero and prints the matched prior attempt's `human_feedback` on a hit. |
+| `record --repo-root <d> --description <text> --hypothesis <text> --diff-summary <text> --outcome pending\|accepted\|rejected [--supersedes <n>] [--feedback <text>]` | Appends one attempt. `--supersedes <n>` resolves a prior `pending` (or reopens an already-resolved) attempt without editing it. A `rejected` outcome requires `--feedback`. |
+| `show --repo-root <d> --description <text>` | Prints the full ledger for one bug, human-readable. |
+
+Stored at `.dev-agent/fix-attempts/<hash>.json` in the **target** repo, `<hash>` derived from the normalized bug description (there is no PR number or commit to key on at attempt 1). Append-only — a corrected outcome is a new record referencing the one it resolves via `supersedes`, never an edit. Full design rationale: `fix-bug/references/fix-attempt-ledger.md`.
+
+---
+
+### `scripts/circuit-breaker-cli.mjs` and the shared circuit breaker
+
+Top-level `scripts/`, not scoped to one skill — `sync-prs`'s CI-remediation loop and any future skill with a "repeat until X" step call the same primitive.
+
+| Command | Purpose |
+|---|---|
+| `check --repo-root <d> --session-id <id> [--job-type <type>] --input <text> [--turn-limit N] [--token-limit N]` | Pre-flight check before a risky action. Exits non-zero (throws `CircuitBreakerError`) if the next turn would exceed either limit. Call this *before* the action, never after. |
+| `record --repo-root <d> --session-id <id> --input <text> [--token-delta N] [--pass-fail true\|false]` | Appends the outcome after the action completed. `check` and `record` are separate calls because the outcome isn't known at check time. |
+| `show --repo-root <d> --session-id <id>` | Prints turn count, accumulated tokens, and per-turn history for one session. |
+
+Stored at `.dev-agent/circuit-breaker/<session-id>.json` in the **target** repo. Records `input_hash`, never raw input text. Sessions are per-loop-instance (e.g. `sync-prs` uses `pr-<N>-ci-remediation`) — a trip on one session never affects another. Default budgets (`DEFAULT_BUDGETS` in `circuit-breaker.mjs`) are starting proposals, not measured constants; pass explicit `--turn-limit`/`--token-limit` to override. Full design rationale: `scripts/circuit-breaker.md`.
+
+---
+
 ### `validate_skill.py` — what it checks
 
 Run as `python3 skill-factory/scripts/validate_skill.py <skill-name>`. Full check list, verified against the actual script:

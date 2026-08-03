@@ -57,7 +57,7 @@ This is the only command you need. It does everything: injects the governance pr
 dev-agent-skills setup
 Skills directory: /home/<you>/10xMinds/AI-Dev-Agent/dev-agent-skills
 
-Found 20 skills: coding-standards-backend coding-standards-database coding-standards-e2e coding-standards-frontend coding-standards-project-organization coding-standards-tailwind coding-standards-tanstack-query coding-standards eslint-rule-author first-principles-review fix-bug graphify investigate-issue plan-feature skill-add skill-factory skill-update sync-prs typescript-conventions webapp-conventions
+Found 21 skills: coding-standards-backend coding-standards-database coding-standards-e2e coding-standards-frontend coding-standards-project-organization coding-standards-tailwind coding-standards-tanstack-query coding-standards eslint-rule-author first-principles-review fix-bug graphify investigate-issue plan-feature review-pr skill-add skill-factory skill-update sync-prs typescript-conventions webapp-conventions
 
   ✓ Clarification protocol — injected into 0 skill(s), refreshed in 20
   ✓ Self-improvement protocol — injected into 0 skill(s), refreshed in 20
@@ -65,7 +65,7 @@ Found 20 skills: coding-standards-backend coding-standards-database coding-stand
   ✓ Graph-memory protocol — opted in: 2 skill(s) (injected 0 new, refreshed 2)
 
   ✓ OpenCode global config — /home/<you>/.config/opencode/opencode.json (permission.skill=allow; ...)
-  ✓ README.md skills table — already up to date (20 skills)
+  ✓ README.md skills table — already up to date (21 skills)
 
   ✓ Claude Code — /home/<you>/.claude/skills (20 new links)
   ✓ OpenCode — /home/<you>/.config/opencode/skills (20 new links)

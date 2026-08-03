@@ -164,7 +164,7 @@ A small number of skills (`coding-standards`, `sync-prs` — see [`06-REFERENCE.
 
 ## Graph-memory — when the agent references something it learned before
 
-`fix-bug` and `plan-feature` (currently the only two — see [`06-REFERENCE.md`](./06-REFERENCE.md)) opted into a second, different kind of memory: `graphify`'s own built-in `save-result`/`reflect` mechanism, which persists **across sessions and across developers**, not just within one conversation the way session-memory does. You may see something like:
+`fix-bug`, `plan-feature`, and `review-pr` (see [`06-REFERENCE.md`](./06-REFERENCE.md) for the full opt-in list) opted into a second, different kind of memory: `graphify`'s own built-in `save-result`/`reflect` mechanism, which persists **across sessions and across developers**, not just within one conversation the way session-memory does. You may see something like:
 
 > "Note: an earlier session marked this same query path as a dead end — looking elsewhere."
 
@@ -175,6 +175,22 @@ or, in the final report:
 **Also expected, correct behavior.** This is a separate mechanism from session-memory above — different purpose (was a specific part of the codebase graph actually useful, not "did I already check this in this conversation"), different lifetime (persists on disk, not reset per conversation). It's cheap and re-evaluated fresh on every run — not a stale cache silently trusted forever.
 
 **One honest limitation worth knowing:** if code gets renamed or restructured, an old reference to it is dropped from consideration automatically — but silently, with no visible warning that it happened. If a lesson you'd expect to see about a piece of code isn't showing up, that may be why; it's not a sign the mechanism failed.
+
+## `fix-bug`'s fix-attempt ledger — a third, distinct kind of memory
+
+Do not confuse this with graph-memory above — same neighborhood, different question entirely. Graph-memory asks "was this graph query useful." The fix-attempt ledger asks "was this specific fix already tried and rejected on this bug." Different storage (`.dev-agent/fix-attempts/`, not `graphify`'s own store), different trigger (a developer saying a fix didn't work, not a query outcome), and only `fix-bug` has it.
+
+If you report that a fix didn't work, expect something like:
+
+> ✗ KNOWN DEAD END — this matches attempt #1, already rejected.
+>   Prior hypothesis: hardcoded URL in Footer.tsx was stale
+>   Rejected because: still 404s, points to the wrong app entirely
+
+That means the agent is about to re-propose (or already tried to) an idea you already turned down — it caught this before proposing it again, using your own earlier feedback rather than re-deriving the same wrong guess. This is the mechanism working correctly, not a sign it's stuck.
+
+**What actually makes this work:** when you tell the skill a fix is wrong, be specific about *why*, not just "that didn't work." The feedback text you give becomes the thing a later attempt checks against — a vague rejection produces a vague dead-end check.
+
+**Three rejected attempts in a row on the same bug is called out explicitly**, not silently retried a fourth time — if you see that, there's a good chance the original bug description was missing something, and the agent will ask rather than keep guessing.
 
 ---
 

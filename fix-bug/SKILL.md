@@ -253,6 +253,23 @@ proceed with Step 7 using only this skill's own guardrails.
 
 ## Step 7 — Determine the fix
 
+**Before proposing anything, check whether this hypothesis is already a
+known dead end** — see `references/fix-attempt-ledger.md` for why this
+exists and how matching works.
+
+```bash
+node scripts/ledger-cli.mjs check --repo-root "$REPO_DIR" \
+  --description "<the bug description as given by the developer>" \
+  --hypothesis "<the fix you are about to propose, one sentence>"
+```
+
+If this returns **KNOWN DEAD END** (exit code 2), do not propose that fix —
+read the prior rejection's feedback and address that specific point, not a
+reworded version of the same idea. If it reports an already-`accepted`
+attempt on this issue, read that context before proceeding: either this is
+a genuinely new report, or the developer is re-raising something believed
+fixed, and those call for different next steps.
+
 The fix must be:
 
 - **Minimal** — change only what the bug description identifies.
@@ -324,6 +341,22 @@ git -C "$REPO_DIR" diff <target-file-path>
 The diff must show only the minimal change. If it shows unrelated changes,
 revert and redo.
 
+**Record this attempt in the ledger now, as `pending`** — do not wait for
+Step 10's commit gate, which defaults to not committing at all and would
+leave rejected attempts unrecorded (see `references/fix-attempt-ledger.md`).
+
+```bash
+node scripts/ledger-cli.mjs record --repo-root "$REPO_DIR" \
+  --description "<the bug description as given by the developer>" \
+  --hypothesis "<the fix you just applied, one sentence — matches Step 7's check>" \
+  --diff-summary "<file:line — what changed, one line>" \
+  --files "<target-file-path>" \
+  --outcome pending
+```
+
+The outcome is corrected later via Step 10 (if committed) or Step 13 (if the
+developer reports it didn't work) — never by editing this record directly.
+
 ## Step 10 — Commit
 
 **Gate — do not commit unless BOTH are true:**
@@ -343,6 +376,27 @@ Only when the developer has confirmed: stage only the file you changed. Never
 git -C "$REPO_DIR" add <target-file-path>
 git -C "$REPO_DIR" commit -m "[agent] fix: <bug description, max 60 chars>"
 ```
+
+**Resolve the pending ledger record now** — a commit is the developer
+choosing to keep this fix, which is a real accept signal even before Step 13
+would otherwise confirm it. Reuse the attempt number Step 9 recorded:
+
+```bash
+COMMIT_SHA=$(git -C "$REPO_DIR" rev-parse HEAD)
+node scripts/ledger-cli.mjs record --repo-root "$REPO_DIR" \
+  --description "<same bug description used throughout>" \
+  --hypothesis "<same hypothesis text from Step 9>" \
+  --diff-summary "<same diff-summary from Step 9>" \
+  --outcome accepted --commit-sha "$COMMIT_SHA" --supersedes <n>
+```
+
+If the developer later reports back that a committed fix didn't actually
+work, Step 13 still applies — but supersede attempt #<n from Step 10's own
+commit-resolution write>, i.e. the attempt that most recently resolved this
+issue, not the original `pending` record from Step 9. Superseding an
+already-superseded record is intentionally rejected by the ledger (see
+`references/fix-attempt-ledger.md`); superseding the *current* resolution
+is what reopens it correctly.
 
 ## Step 11 — Push and open the PR
 
@@ -450,6 +504,56 @@ surface correctly regardless, since they carry their own answer/correction
 text — this asymmetry is exactly why only genuine corrections are worth
 recording here, not everything.
 
+## Step 13 — If the developer reports back that the fix didn't work
+
+This is a re-entry into the skill, not a fresh bug report — the same issue,
+one attempt further along. It closes out the `pending` record Step 9 wrote.
+**Without this step running, that record stays `pending` forever and the
+dead-end check in Step 7 has nothing to check against on the next attempt.**
+
+1. **Resolve the pending or previously-accepted attempt** — `--supersedes`
+   must reference the attempt that currently holds this issue's live
+   outcome (Step 9's `pending` record if nothing has resolved it yet, or a
+   later `accepted`/`rejected` record if the issue is being reopened), not
+   necessarily attempt #1. If unsure which number that is:
+
+   ```bash
+   node scripts/ledger-cli.mjs show --repo-root "$REPO_DIR" \
+     --description "<same bug description used throughout>"
+   ```
+
+   The most recent entry with no `(resolved by #...)` note next to it is
+   the one to supersede.
+
+   ```bash
+   node scripts/ledger-cli.mjs record --repo-root "$REPO_DIR" \
+     --description "<same bug description used throughout>" \
+     --hypothesis "<the fix just reported as not working>" \
+     --diff-summary "<what changed — from Step 9's own record>" \
+     --outcome rejected --supersedes <n> \
+     --feedback "<what the developer ACTUALLY said, close to verbatim>"
+   ```
+
+   The `--feedback` text is the one thing a diff can never contain — record
+   what was actually said, not a paraphrase down to "didn't work." Step 7's
+   dead-end check on the next attempt shows this text back to explain the
+   rejection. If the recorded attempt number can't be found, stop and ask
+   rather than guessing at `--supersedes` — see
+   `references/fix-attempt-ledger.md` for why a wrong value here is worse
+   than failing loudly.
+
+2. **Revert the rejected change** if it's still present and the developer
+   hasn't asked you to leave it (`git checkout -- <file>`, only if a git
+   repo exists per Step 0; otherwise ask how to proceed).
+
+3. **Return to Step 7.** Its dead-end check will now correctly flag the
+   hypothesis just rejected, because it was just recorded.
+
+4. **If three or more rejected attempts have accumulated on this issue,
+   say so before proposing a fourth.** Not a hard stop — but it's a signal
+   the bug description may be missing something, or Steps 1–6 need
+   redoing rather than trusting their earlier output. Ask, don't guess again.
+
 ## What the agent must NEVER do
 
 - Merge the PR — humans merge, always.
@@ -477,6 +581,7 @@ recording here, not everything.
 | Cannot determine correct fix | Report findings, ask for clarification. Do not guess. |
 | Push rejected | Report and stop. Do not force-push. |
 | PR creation fails | Report the error with the exact gh output. |
+| Ledger `record` rejects `--supersedes` | The attempt was already resolved, or the number doesn't exist. Do not retry with a different number to force it through — say so and ask the developer, since a wrong `--supersedes` value would misattribute which hypothesis a rejection was actually about. |
 
 ## See also
 
@@ -486,3 +591,5 @@ recording here, not everything.
   naming, PR format, and guardrails reference
 - [`references/edge-cases.md`](./references/edge-cases.md) — known edge cases
   and how to handle them
+- [`references/fix-attempt-ledger.md`](./references/fix-attempt-ledger.md) —
+  the ledger schema, the supersedes mechanism, and why it exists
