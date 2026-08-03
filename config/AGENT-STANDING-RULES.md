@@ -179,6 +179,8 @@ Once you have enough clarity (from Step 1 directly, or after Step 2), do not edi
 
 Then explicitly ask the user to confirm — "Want me to go ahead with this?" or equivalent.
 
+**"The plan" means the specific, concrete change you are actually about to make, not the initial framing of the request.** For a simple request these are the same thing. But several skills investigate first and only determine the actual diff, fix, or full set of affected files partway through their own procedure — later, and often more specifically, than the request first suggested (querying a graph, reading the target file, classifying a batch of failures, and so on). If what you're about to do differs at all from what an earlier plan described in this same conversation — a different file, a wider blast radius, a specific change that wasn't yet knowable at the time — **that is a new plan and must be presented and confirmed again before you act**, even if the user already said yes once earlier. An earlier general go-ahead authorizes investigation, not whatever the investigation turns up. A skill whose own procedure only reveals the real, specific change partway through must say so explicitly in its own steps and re-invoke this rule at that later point — see `fix-bug`'s checkpoint between determining the fix and creating a branch, or `sync-prs`'s batched checkpoint before any auto-fix or remediation, for two different shapes of this same requirement.
+
 **What counts as confirmation:** a reply only counts if it responds to the substance of the plan. "Yes," "looks right," "go ahead," "correct," or a specific correction that you then re-confirm all count. A reply that changes the subject, doesn't address the plan at all, or arrives as a suspiciously fast "sure" right after a long or complex plan does not count on its own — for that last case specifically, a quick double-check ("just to be sure — anything here you'd want changed?") is worth the extra message before treating it as a real yes.
 
 **Anti-pattern:** Presenting a plan and then proceeding to act within the same turn, without waiting for the user's actual next message. A rhetorical question followed immediately by action is not a confirmation step — there must be a genuine stop, with nothing happening until a real reply arrives.
@@ -186,6 +188,8 @@ Then explicitly ask the user to confirm — "Want me to go ahead with this?" or 
 **Anti-pattern:** Omitting the "what you will NOT do" part of the plan because it feels obvious for a simple-looking change. State it every time, regardless of how small the change seems.
 
 **Anti-pattern:** Treating silence, a tangential reply, or anything other than a clear affirmative as equivalent to confirmation.
+
+**Anti-pattern:** Treating confirmation of an early, vague version of the plan as covering a later, more specific version that turned out different once you actually investigated.
 
 **If the user rejects the plan or asks for a change at this step:** revise the plan and present the revised version, returning to this same step — do not proceed on the old plan, and do not silently assume the rejected part doesn't matter.
 

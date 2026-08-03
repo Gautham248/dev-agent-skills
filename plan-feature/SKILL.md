@@ -133,6 +133,14 @@ exist in the actual codebase (found via the graph or read directly) or be
 explicitly listed under "Files to create" — never reference a file you
 haven't verified.
 
+For the template's "4. Tests" implementation step, don't write generic
+prose ("add unit tests for the new function") — name the specific
+boundary/negative cases the feature's acceptance criteria imply, the same
+way `generate-tests` would derive them from a contract. This doesn't
+require running `generate-tests` yet (the code doesn't exist), just
+stating concretely what "tested" will mean for this feature once it does,
+so Step 7's offer has something specific to act on.
+
 That rule is enforced by a script, not trust. After drafting, write the plan
 to a file and run — this check is not optional:
 
@@ -167,6 +175,12 @@ Dispatch on the output mode — exact commands in
 **Graph-memory:** now that the plan is written, record whether the Step 4
 queries were actually useful for it — see `GRAPH-MEMORY-PROTOCOL.md`. Be
 honest about `useful`/`dead_end`/`corrected`.
+
+**Offer test scaffolding once the plan is saved, not before.** One line:
+"Once you start building this, I can generate the actual test scaffolding
+for the cases in the Tests section — just ask." This is a pointer, not an
+automatic hand-off — the feature doesn't exist yet, so `generate-tests`
+has nothing to derive a contract from until implementation begins.
 
 ## If something goes wrong
 

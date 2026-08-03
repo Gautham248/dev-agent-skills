@@ -53,6 +53,8 @@ Once you have enough clarity, do not start editing, committing, or running git/G
 
 Then explicitly ask the user to confirm before you proceed — something like "Want me to go ahead with this?" This is a hard stop, not a formality.
 
+**"The plan" means the specific, concrete change you are actually about to make — not the initial framing of the request.** For a simple request this is the same thing and one pass through this step is enough. But many skills investigate first and only determine the actual diff, fix, or set of files partway through their own procedure (e.g. after querying a graph, reading the target file, or classifying a batch of failures) — later, and often more specifically, than the request first suggested. If what you're about to do differs at all from what this plan described — a different file, a wider blast radius, a specific line-level change that wasn't yet knowable when you first asked — **that is a new plan, and it must be presented and confirmed again before you act**, even if the user already said yes once earlier in this conversation. An earlier general go-ahead authorizes investigation, not whatever the investigation happens to turn up. If a skill's own steps only reveal the real, specific change well into its procedure, that skill must say so explicitly and re-invoke this step at that point — see e.g. `fix-bug`'s and `sync-prs`' own SKILL.md for how each does this for its particular shape of work.
+
 ### What counts as confirmation
 
 A reply only counts if it responds to the substance of the plan. "Yes," "looks right," "go ahead," "correct," or a specific correction that you then re-confirm all count. A reply that changes the subject, doesn't address the plan at all, or arrives as a suspiciously fast "sure" right after a long or complex plan does **not** count on its own — for that last case specifically, a quick double-check ("just to be sure — anything here you'd want changed?") is worth the extra message before treating it as a real yes.
@@ -60,6 +62,8 @@ A reply only counts if it responds to the substance of the plan. "Yes," "looks r
 **Anti-pattern:** Presenting the plan and then proceeding within the same turn without waiting for the user's actual reply. The stop must be real.
 
 **Anti-pattern:** Treating silence, or a reply that doesn't clearly say yes, as confirmation.
+
+**Anti-pattern:** Treating confirmation of an early, vague version of the plan as covering a later, more specific version that turned out different once you actually investigated.
 
 **If the user pushes back or asks for a change:** revise the plan and present it again at this same step — do not proceed on the rejected version.
 
