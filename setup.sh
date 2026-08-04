@@ -256,6 +256,7 @@ inject_protocol_pointers() {
 
 inject_agents_md_sync_pointer() {
   local standing_rules_path="$SKILLS_DIR/config/AGENT-STANDING-RULES.md"
+  local root_agents_path="$SKILLS_DIR/AGENTS.md"
   local sync_script_path="$SKILLS_DIR/scripts/agents-md-sync.sh"
 
   if [ ! -f "$standing_rules_path" ]; then
@@ -269,18 +270,25 @@ inject_agents_md_sync_pointer() {
 
   # Match either the unfilled placeholder (fresh checkout, never run before)
   # or any previously-injected absolute path (re-run, possibly after a
-  # re-clone to a different location).
-  local tmp
-  tmp=$(mktemp)
-  awk -v new="$sync_script_path" '
-    /^Rule 0 below uses this script to manage a project.s AGENTS.md: / {
-      print "Rule 0 below uses this script to manage a project'"'"'s AGENTS.md: " new
-      next
-    }
-    { print }
-  ' "$standing_rules_path" > "$tmp" && mv "$tmp" "$standing_rules_path"
-
-  echo "  ✓ AGENTS.md sync script pointer — $standing_rules_path now points to $sync_script_path"
+  # re-clone to a different location). Process both the canonical source
+  # (config/AGENT-STANDING-RULES.md) and the repo's own root AGENTS.md so
+  # a fresh clone that runs setup.sh has the correct pointer in the file an
+  # agent actually reads, not just in the canonical source.
+  local target tmp
+  for target in "$standing_rules_path" "$root_agents_path"; do
+    if [ ! -f "$target" ]; then
+      continue
+    fi
+    tmp=$(mktemp)
+    awk -v new="$sync_script_path" '
+      /^Rule 0 below uses this script to manage a project.s AGENTS.md: / {
+        print "Rule 0 below uses this script to manage a project'"'"'s AGENTS.md: " new
+        next
+      }
+      { print }
+    ' "$target" > "$tmp" && mv "$tmp" "$target"
+    echo "  ✓ AGENTS.md sync script pointer — $target now points to $sync_script_path"
+  done
 }
 
 inject_agents_md_sync_pointer
