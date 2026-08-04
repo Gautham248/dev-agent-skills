@@ -434,20 +434,43 @@ link_skills() {
   local agent_name="$2"
   mkdir -p "$target_dir"
   local linked=0
+  local relinked=0
   for skill_dir in "${SKILL_FOLDERS[@]}"; do
     skill_name=$(basename "$skill_dir")
     link_path="$target_dir/$skill_name"
     if [ -L "$link_path" ]; then
-      : # already linked
+      if [ ! -e "$link_path" ]; then
+        # Dangling: the symlink exists but its target doesn't. Almost
+        # certainly this repo was re-cloned/moved and the old target path
+        # no longer exists — the same self-correcting pattern used for
+        # opencode.json / CLAUDE.md / the AGENTS.md sync pointer elsewhere
+        # in this script, just never applied to skill symlinks themselves.
+        # A dangling target can never legitimately be someone's intentional
+        # setup, so it's safe to fix without asking.
+        rm "$link_path"
+        ln -s "$skill_dir" "$link_path"
+        relinked=$((relinked + 1))
+      elif [ "$(readlink "$link_path")" != "$skill_dir" ]; then
+        # Valid symlink, but pointing somewhere other than our current
+        # skill_dir and that target actually exists — could be a legitimate
+        # manual setup pointing elsewhere. Ambiguous ownership, same as the
+        # directory-collision case below: don't touch it, just say so.
+        echo "  ⚠️  $skill_name: $link_path is a symlink but points elsewhere ($(readlink "$link_path")) — leaving it as-is."
+      fi
+      # else: already correctly linked, nothing to do
     elif [ -d "$link_path" ]; then
-      echo "  ⚠️  $skill_name: directory already exists at $link_path (not a symlink — skipping)"
+      if diff -rq "$skill_dir" "$link_path" >/dev/null 2>&1; then
+        echo "  ⚠️  $skill_name: an identical, non-symlinked copy already exists at $link_path — looks like a leftover from before this was symlinked. Safe to replace: rm -rf \"$link_path\" && re-run setup.sh."
+      else
+        echo "  ⚠️  $skill_name: a DIFFERENT directory already exists at $link_path — looks like your own custom skill, not ours. Leaving it untouched; it will not receive protocol injections or updates from this repo. Rename one of the two if that's unintentional."
+      fi
       continue
     else
       ln -s "$skill_dir" "$link_path"
       linked=$((linked + 1))
     fi
   done
-  echo "  ✓ $agent_name — $target_dir ($linked new links)"
+  echo "  ✓ $agent_name — $target_dir ($linked new links, $relinked relinked)"
 }
 
 # ── Claude Code ──────────────────────────────────────────────────────────────
