@@ -1,6 +1,6 @@
-# Standing rules for any OpenCode session in this environment
+# Standing rules for any AI coding session in this environment
 
-These rules apply to every request, regardless of project, regardless of how simple, routine, or urgent the request looks. They compose alongside any project-specific AGENTS.md — this file does not replace it.
+These rules apply to every request, regardless of harness (OpenCode, Claude Code, or otherwise), regardless of project, regardless of how simple, routine, or urgent the request looks. They compose alongside any project-specific AGENTS.md — this file does not replace it.
 
 <!-- BEGIN dev-agent-skills sync script pointer (managed by setup.sh -- do not edit this block manually; it self-corrects on every `bash setup.sh` run regardless of where this repo is checked out) -->
 Rule 0 below uses this script to manage a project's AGENTS.md: /home/claude/dev-agent-skills/scripts/agents-md-sync.sh
