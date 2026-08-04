@@ -2,31 +2,63 @@
 
 These rules apply to every request, regardless of project, regardless of how simple, routine, or urgent the request looks. They compose alongside any project-specific AGENTS.md — this file does not replace it.
 
+<!-- BEGIN dev-agent-skills sync script pointer (managed by setup.sh -- do not edit this block manually; it self-corrects on every `bash setup.sh` run regardless of where this repo is checked out) -->
+Rule 0 below uses this script to manage a project's AGENTS.md: /home/claude/dev-agent-skills/scripts/agents-md-sync.sh
+<!-- END dev-agent-skills sync script pointer -->
+
 ## The governing meta-principle — read this before anything else
 
 If you ever find yourself weighing whether a rule below "really applies" to this particular request — because it seems too simple, too obvious, too small, too urgent, or too unrelated to code — **that weighing is itself the failure mode every rule below exists to prevent.** None of the rules below have a simplicity exemption, an urgency exemption, or a judgment-call exemption. Follow them in order, every time. The only acceptable deviation from a rule is the fallback that rule itself explicitly describes for when its own action genuinely cannot be completed — never a deviation based on your own assessment that the rule doesn't fit this case.
 
 ---
 
-## Rule 0 — Ensure a project-level AGENTS.md exists before anything else
+## Rule 0 — Ensure a project-level AGENTS.md exists, and that it's actually ours, before anything else
 
-Before doing anything else in response to **any** request — before Rule 1's graph check, before grepping, before globbing, before asking the user anything — check whether the workspace root contains an `AGENTS.md` file:
+Before doing anything else in response to **any** request — before Rule 1's graph check, before grepping, before globbing, before asking the user anything — run:
 
 ```bash
-test -f AGENTS.md && echo "AGENTS_EXISTS" || echo "NO_AGENTS"
+bash __AGENTS_MD_SYNC_SCRIPT__ status
 ```
 
-**If it prints `NO_AGENTS`:** copy the full contents of the environment's standing rules file — the very file you are reading right now — into `AGENTS.md` at the workspace root. Do not summarize. Do not distill. Do not abbreviate. Copy it verbatim so that every rule, every anti-pattern, every fallback, and the meta-principle are all present at the project level with zero room for reinterpretation or omission.
+This prints exactly one of five states. Do not guess at the state from `test -f AGENTS.md` yourself, and do not hand-copy standing rules into a file yourself — the script is the only source of truth for both the check and the write, because it reads the canonical rules file directly (no risk of an LLM-driven copy silently dropping or paraphrasing content) and because a project's `AGENTS.md` existing is not the same thing as it being ours — that distinction is exactly what the script's sha256 sidecar (`.agents-md.sha256`, committed alongside `AGENTS.md`) exists to make reliable instead of guessed at.
 
-Do not wait for permission to create this file — the standing rules demand it. Write it, then proceed to Rule 1 immediately.
+**`NO_AGENTS`** — no `AGENTS.md` in this project yet.
+```bash
+bash __AGENTS_MD_SYNC_SCRIPT__ write
+```
+Do not wait for permission — the standing rules demand it. Run it, then proceed to Rule 1 immediately.
 
-**If it prints `AGENTS_EXISTS`:** proceed to Rule 1. Do not modify the existing AGENTS.md unless the user explicitly asked you to.
+**`AGENTS_OURS_FRESH`** — already ours, already current. Proceed straight to Rule 1. Do not modify the file unless the user explicitly asked you to.
+
+**`AGENTS_OURS_STALE`** — ours, and untouched by anyone since we last wrote it, but the canonical standing rules have changed since then (the sidecar's integrity hash matches the file, but its recorded rules-hash doesn't match the current rules file). Safe to refresh automatically, since nothing else has touched it:
+```bash
+bash __AGENTS_MD_SYNC_SCRIPT__ write
+```
+State in one line that you refreshed it because it was out of date, then proceed to Rule 1.
+
+**`AGENTS_TAMPERED`** — a sidecar exists but no longer matches the file's actual content, meaning someone edited this `AGENTS.md` by hand (or some other tool did) after dev-agent-skills last wrote it. Treat this exactly like `AGENTS_FOREIGN` below — do not silently overwrite content someone deliberately changed.
+
+**`AGENTS_FOREIGN`** — an `AGENTS.md` already exists but there's no sidecar at all, meaning dev-agent-skills never wrote it. Most commonly this means another tool's own init/scaffolding command (for example OpenCode's `/init`) wrote one before this environment's skills were set up, or someone hand-wrote one. This file contains none of the rules you are currently reading — no graph-first investigation, no skill-loading, no clarification protocol — and any harness or session that only reads `AGENTS.md` (rather than also receiving these standing rules as instructions, the way this session did) will behave as if none of this exists.
+
+Do **not** silently proceed as if this file were equivalent to your own standing rules, and do not overwrite or edit it without asking. Instead, before doing anything else:
+
+1. Tell the user plainly, once, that this project's `AGENTS.md` already exists but wasn't created by dev-agent-skills, so it doesn't carry these rules.
+2. Ask exactly one closed question: "Want me to append the dev-agent-skills rules to the bottom of the existing AGENTS.md (nothing in it gets removed or changed), or leave it as-is?"
+3. If yes:
+   ```bash
+   bash __AGENTS_MD_SYNC_SCRIPT__ append
+   ```
+   This appends a clearly delimited block to the end of the file and leaves everything above it untouched. State in one line that you did this, then proceed to Rule 1.
+4. If no: proceed to Rule 1 without modifying the file. Do not ask again for the rest of this session — a "no" is a real answer, not something to retry.
 
 ### Anti-patterns — explicitly forbidden for Rule 0
 
 - Deciding the rules are "already in the system prompt" so a project-level AGENTS.md is unnecessary. The system prompt is easy to override with judgment calls; a project-level file sitting in the workspace root is the hardest instruction to ignore.
 - Skipping this check because the request seems trivial. No simplicity exemption — the AGENTS.md is the gate that prevents Rule 1 from being skipped.
-- Writing a bare or incomplete AGENTS.md. It must contain the four items above. A one-liner defeats the purpose.
+- Treating any pre-existing `AGENTS.md` as equivalent to your own just because the file exists. `status` tells you which of the five states you're actually in — check before trusting the content, every time.
+- Hand-copying these rules into `AGENTS.md` yourself instead of running the script, even if it seems faster. The script reads the canonical file directly; an LLM-driven copy of a document this size is exactly the kind of unverified assertion Rule 0 exists to eliminate, not introduce.
+- Overwriting or editing a foreign or tampered `AGENTS.md` without asking, even though appending the managed block would objectively improve it. The file may belong to a tool or a person with intent you don't know — ask first, every time.
+- Re-asking the append question more than once per session after a "no."
 
 ---
 
