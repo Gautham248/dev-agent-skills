@@ -307,6 +307,39 @@ description only.
 If you cannot determine the correct fix with confidence, report back to the
 developer with what you found and ask for clarification. Do not guess.
 
+## Step 7b — Present the specific fix and STOP
+
+**This is a required re-invocation of `CLARIFICATION-PROTOCOL.md` Step 3, not
+optional, and not satisfied by whatever go-ahead started this conversation.**
+Whatever the developer confirmed when they first asked for this fix was, at
+best, "investigate and fix the described bug" — it could not have covered
+the specific file, line, and change identified just now in Step 7, because
+that wasn't known yet. Presenting *that* concrete plan and getting a real
+answer to it is what this step is for.
+
+Present, in plain language:
+
+- **The exact change** — file, the specific value/line, before -> after.
+- **Blast radius**, if Step 7's `graphify affected` check returned anything
+  beyond what the bug report itself describes — name it explicitly, don't
+  fold it silently into "the fix."
+- **What you're explicitly NOT touching** — any other issue noticed in the
+  file per Step 7's instruction not to fix unrelated things.
+
+Then stop and wait for an explicit yes. Do not create the branch, do not
+touch the file, do not run any git command, until you have one.
+
+**Anti-pattern:** Treating the fact that a plan-and-stop already happened
+earlier in this conversation (per the injected Clarification Protocol, before
+Step 1 of this skill) as covering this step. That earlier confirmation
+authorized investigating the bug — it did not and could not authorize this
+specific diff, since this diff did not exist yet at that point.
+
+**Anti-pattern:** Skipping this because the fix "seems too small to bother
+confirming." A one-line constant change to the wrong file is exactly the
+kind of fix this step exists to catch before it's a branch and a commit
+instead of a sentence in a chat.
+
 ## Step 8 — Create the branch
 
 **Only if Step 0 determined a git repository exists.** If there's no git

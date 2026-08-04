@@ -267,6 +267,49 @@ inject_protocol_pointers() {
   fi
 }
 
+# ── AGENTS.md sync script pointer ─────────────────────────────────────────────
+#
+# AGENT-STANDING-RULES.md's Rule 0 invokes scripts/agents-md-sync.sh to manage
+# a project's AGENTS.md. Since that rule runs from inside an arbitrary target
+# project directory (not from within this repo), it needs this script's
+# absolute path, not a relative one — same reasoning as the OpenCode global
+# config above ($standing_rules_path), and the same self-correcting mechanism
+# as inject_protocol_pointers below: strip whatever placeholder/path is
+# already there and rebuild it fresh every run, so a re-clone to a new
+# location just works on the next `bash setup.sh`.
+
+inject_agents_md_sync_pointer() {
+  local standing_rules_path="$SKILLS_DIR/config/AGENT-STANDING-RULES.md"
+  local sync_script_path="$SKILLS_DIR/scripts/agents-md-sync.sh"
+
+  if [ ! -f "$standing_rules_path" ]; then
+    echo "  ⚠️  AGENT-STANDING-RULES.md not found at $standing_rules_path — skipping sync-script pointer injection."
+    return
+  fi
+  if [ ! -f "$sync_script_path" ]; then
+    echo "  ⚠️  agents-md-sync.sh not found at $sync_script_path — skipping sync-script pointer injection."
+    return
+  fi
+
+  # Match either the unfilled placeholder (fresh checkout, never run before)
+  # or any previously-injected absolute path (re-run, possibly after a
+  # re-clone to a different location).
+  local tmp
+  tmp=$(mktemp)
+  awk -v new="$sync_script_path" '
+    /^Rule 0 below uses this script to manage a project.s AGENTS.md: / {
+      print "Rule 0 below uses this script to manage a project'"'"'s AGENTS.md: " new
+      next
+    }
+    { print }
+  ' "$standing_rules_path" > "$tmp" && mv "$tmp" "$standing_rules_path"
+
+  echo "  ✓ AGENTS.md sync script pointer — $standing_rules_path now points to $sync_script_path"
+}
+
+inject_agents_md_sync_pointer
+echo ""
+
 inject_protocol_pointers
 echo ""
 
