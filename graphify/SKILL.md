@@ -61,7 +61,31 @@ Drop any folder of code, docs, papers, images, or video into graphify and get a 
 
 If the user invoked `/graphify --help` or `/graphify -h` (with no other arguments), print the contents of the `## Usage` section above verbatim and stop. Do not run any commands, do not detect files, do not default the path to `.`. Just print the Usage block and return.
 
-**Fast path — existing graph:** Before doing anything else, check whether `graphify-out/graph.json` exists. The expected location is `graphify-out/graph.json` relative to the **current working directory** (i.e. the project root where you are running commands). If it exists AND the user's request is a natural-language question about the codebase (e.g. "How does X work?", "What calls Y?", "Trace the data flow through Z") and NOT an explicit rebuild command (`--update`, `--cluster-only`, or a bare path/URL that implies fresh extraction): **skip Steps 1–5 entirely and jump straight to `## For /graphify query`.** Run `graphify query "<question>"` immediately. Do not run detect. Do not check corpus size. Do not ask the user to narrow. The graph is already built — use it.
+**Fast path — existing graph:** Before doing anything else, check whether `graphify-out/graph.json` exists. The expected location is `graphify-out/graph.json` relative to the **current working directory** (i.e. the project root where you are running commands). If it exists AND the user's request is a natural-language question about the codebase (e.g. "How does X work?", "What calls Y?", "Trace the data flow through Z") and NOT an explicit rebuild command (`--update`, `--cluster-only`, or a bare path/URL that implies fresh extraction), run this check before trusting it — existence alone proves neither that it belongs to this project nor that it's current:
+
+```bash
+if [ -f graphify-out/.graphify_root ] && [ "$(cat graphify-out/.graphify_root)" != "$(pwd)" ]; then
+  echo "GRAPH_FOREIGN"
+else
+  echo "GRAPH_LOCAL"
+fi
+```
+
+**If it prints `GRAPH_FOREIGN`:** this `graphify-out/` was built for a different directory — most likely copied, zipped, or left over from a stale worktree. Its `source_file` paths won't resolve against the current tree, so treating it as current would produce wrong answers, not just stale ones. Say in one line that the existing graph looks like it belongs to a different location and is being treated as absent, then fall through to Step 1 and rebuild — do not query it.
+
+**If it prints `GRAPH_LOCAL`** (this also covers an older graph built before `.graphify_root` existed — a missing file isn't itself a red flag, only a mismatched one is): confirm it's actually current before querying — a graph built several commits ago and never refreshed can point at code that no longer exists:
+
+```bash
+graphify check-update .
+```
+
+If that reports pending changes, refresh first (AST-only, no API cost, no LLM call):
+
+```bash
+graphify update .
+```
+
+Only then **skip the rest of Steps 1–5 and jump straight to `## For /graphify query`.** Run `graphify query "<question>"`. Do not run detect. Do not check corpus size. Do not ask the user to narrow.
 
 If no path was given, use `.` (current directory). Do not ask the user for a path.
 
