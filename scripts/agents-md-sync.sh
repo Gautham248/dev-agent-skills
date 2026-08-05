@@ -19,6 +19,12 @@
 #   agents-md-sync.sh status   # prints one state word, see below, exit 0 always
 #   agents-md-sync.sh write    # create AGENTS.md, or refresh it if stale (case 1 / case 3)
 #   agents-md-sync.sh append   # merge into an existing foreign AGENTS.md (case 2)
+#   agents-md-sync.sh accept   # re-baseline the sidecar to whatever AGENTS.md
+#                               # currently contains, without touching the file.
+#                               # For a deliberate hand-edit of a file we
+#                               # generated (AGENTS_TAMPERED), or a pre-existing
+#                               # foreign file the team decides to keep as-is
+#                               # (AGENTS_FOREIGN) rather than merge into.
 #
 # States printed by `status`:
 #   NO_AGENTS          — no AGENTS.md in this project yet
@@ -164,12 +170,41 @@ cmd_append() {
   echo "Appended dev-agent-skills managed block to the existing $AGENTS_FILE (was: $state). Nothing above the BEGIN marker was touched."
 }
 
+cmd_accept() {
+  local state
+  state=$(cmd_status)
+
+  if [ "$state" = "NO_AGENTS" ]; then
+    echo "No $AGENTS_FILE exists yet — nothing to accept. Use 'write' to create one." >&2
+    exit 1
+  fi
+
+  require_standing_rules
+  local full_hash canonical_hash
+  full_hash=$(hash_file "$AGENTS_FILE")
+  canonical_hash=$(hash_file "$STANDING_RULES")
+  write_sidecar "$full_hash" "$canonical_hash"
+
+  case "$state" in
+    AGENTS_TAMPERED)
+      echo "Accepted the current $AGENTS_FILE as the new baseline (was: $state). Content left exactly as it is -- whoever edited it, that edit is now the tracked version. Future status checks will treat this as ours until it's edited again."
+      ;;
+    AGENTS_FOREIGN)
+      echo "Accepted the current $AGENTS_FILE as the new baseline (was: $state). Content left exactly as it is -- note this file still contains none of dev-agent-skills' standing rules, since 'accept' only changes what gets tracked, not what the file says. Run 'append' instead if you actually want the rules merged in."
+      ;;
+    *)
+      echo "Accepted the current $AGENTS_FILE as the new baseline (was: $state)."
+      ;;
+  esac
+}
+
 case "${1:-status}" in
   status) cmd_status ;;
   write)  cmd_write "${2:-}" ;;
   append) cmd_append "${2:-}" ;;
+  accept) cmd_accept ;;
   *)
-    echo "Usage: agents-md-sync.sh {status|write [--force]|append [--force]}" >&2
+    echo "Usage: agents-md-sync.sh {status|write [--force]|append [--force]|accept}" >&2
     exit 2
     ;;
 esac

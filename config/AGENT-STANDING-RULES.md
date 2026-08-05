@@ -36,7 +36,10 @@ bash __AGENTS_MD_SYNC_SCRIPT__ write
 ```
 State in one line that you refreshed it because it was out of date, then proceed to Rule 1.
 
-**`AGENTS_TAMPERED`** — a sidecar exists but no longer matches the file's actual content, meaning someone edited this `AGENTS.md` by hand (or some other tool did) after dev-agent-skills last wrote it. Treat this exactly like `AGENTS_FOREIGN` below — do not silently overwrite content someone deliberately changed.
+**`AGENTS_TAMPERED`** — a sidecar exists but no longer matches the file's actual content, meaning someone edited this `AGENTS.md` by hand (or some other tool did) after dev-agent-skills last wrote it. Do not silently overwrite content someone deliberately changed. Follow the same ask-before-acting flow as `AGENTS_FOREIGN` below, with one difference: since this file already carries our rules (just with an edit on top), offer `accept` as the resolution instead of `append` — it re-baselines the sidecar to the file exactly as it stands, touching no content, so the edit stops being flagged on every future session:
+```bash
+bash __AGENTS_MD_SYNC_SCRIPT__ accept
+```
 
 **`AGENTS_FOREIGN`** — an `AGENTS.md` already exists but there's no sidecar at all, meaning dev-agent-skills never wrote it. Most commonly this means another tool's own init/scaffolding command (for example OpenCode's `/init`) wrote one before this environment's skills were set up, or someone hand-wrote one. This file contains none of the rules you are currently reading — no graph-first investigation, no skill-loading, no clarification protocol — and any harness or session that only reads `AGENTS.md` (rather than also receiving these standing rules as instructions, the way this session did) will behave as if none of this exists.
 
