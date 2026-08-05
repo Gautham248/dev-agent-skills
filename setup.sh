@@ -69,10 +69,15 @@ echo ""
 # which one happened to already be present.
 #
 # This is deliberately a SKILL.md-level mechanism, not just an AGENTS.md
-# rule — AGENTS.md is genuinely cross-tool now (Codex, Claude Code, OpenCode,
-# Gemini CLI all read it), but Hermes does not appear to, and a SKILL.md-
-# embedded instruction is the one thing every harness sees identically,
-# regardless of whether it also honors AGENTS.md. Self-improvement in
+# rule — AGENTS.md is cross-tool for some harnesses (Codex reads it
+# natively) but not others: Claude Code reads CLAUDE.md, not AGENTS.md
+# (confirmed against Anthropic's docs — the documented pattern is a
+# CLAUDE.md that imports AGENTS.md with `@AGENTS.md`, which is what
+# configure_claude_code_global() below wires up at the user-instructions
+# level). Gemini CLI reads GEMINI.md, not AGENTS.md, per its own docs.
+# Hermes does not appear to read any of them. A SKILL.md-embedded
+# instruction is the one thing every harness sees identically, regardless
+# of which memory-file convention it honors. Self-improvement in
 # particular used to be opt-in and described as "Hermes only" (CONTRIBUTING.md's
 # old per-skill "## Self-improvement" footer, relying on Hermes's built-in
 # skill_manage tool) — this replaces that with a universal pointer any
@@ -372,6 +377,67 @@ configure_opencode_global() {
 configure_opencode_global
 echo ""
 
+# ── Claude Code global config (standing rules import) ────────────────────────
+#
+# Claude Code reads CLAUDE.md, not AGENTS.md (confirmed against current
+# Anthropic docs: docs/en/memory.md, "AGENTS.md" section — Claude Code does
+# not read AGENTS.md directly). Its documented cross-tool pattern is a
+# CLAUDE.md that imports the shared file with `@path/to/file` syntax.
+#
+# ~/.claude/CLAUDE.md is Claude Code's "User instructions" scope — loaded at
+# the start of every session, in every project, on this machine, same as
+# OpenCode's instructions[] above. We inject an absolute-path import of
+# AGENT-STANDING-RULES.md there via the same strip_managed_block idiom used
+# for SKILL.md, so it self-corrects if this repo is re-cloned elsewhere.
+#
+# Deliberately NOT using --append-system-prompt: that flag has to be passed
+# on every single invocation, which conflicts with "clone and run setup.sh,
+# nothing else" (docs/01-SETUP.md). A CLAUDE.md import is the only
+# set-once mechanism Claude Code offers for this.
+#
+# Per Anthropic's docs, imports in USER-scope memory files (~/.claude/CLAUDE.md)
+# load without the external-import approval dialog that project-scope imports
+# trigger — so this requires no manual confirmation step, same as OpenCode's
+# config above.
+
+configure_claude_code_global() {
+  if ! command -v claude &>/dev/null && [ ! -d "$HOME/.claude" ]; then
+    return  # Claude Code isn't installed/used on this machine — nothing to do
+  fi
+
+  local standing_rules_path="$SKILLS_DIR/config/AGENT-STANDING-RULES.md"
+  if [ ! -f "$standing_rules_path" ]; then
+    echo "  ⚠️  AGENT-STANDING-RULES.md not found at $standing_rules_path — skipping Claude Code global config."
+    return
+  fi
+
+  local global_dir="$HOME/.claude"
+  local claude_md="$global_dir/CLAUDE.md"
+  mkdir -p "$global_dir"
+  [ -f "$claude_md" ] || touch "$claude_md"
+
+  local begin="<!-- BEGIN dev-agent-skills standing rules import (managed by setup.sh -- do not edit this block manually; edit config/AGENT-STANDING-RULES.md instead) -->"
+  local end="<!-- END dev-agent-skills standing rules import -->"
+
+  local stripped
+  stripped=$(mktemp)
+  strip_managed_block "$claude_md" "$begin" "$end" > "$stripped"
+
+  {
+    cat "$stripped"
+    echo ""
+    echo "$begin"
+    echo "@$standing_rules_path"
+    echo "$end"
+  } | cat -s > "$claude_md"
+  rm -f "$stripped"
+
+  echo "  ✓ Claude Code global config — $claude_md imports $standing_rules_path (loads every session, every project, via Claude Code's User instructions scope)"
+}
+
+configure_claude_code_global
+echo ""
+
 # ── README skills table ───────────────────────────────────────────────────────
 #
 # Keeps the table in README.md in sync with whatever skill folders actually
@@ -392,20 +458,43 @@ link_skills() {
   local agent_name="$2"
   mkdir -p "$target_dir"
   local linked=0
+  local relinked=0
   for skill_dir in "${SKILL_FOLDERS[@]}"; do
     skill_name=$(basename "$skill_dir")
     link_path="$target_dir/$skill_name"
     if [ -L "$link_path" ]; then
-      : # already linked
+      if [ ! -e "$link_path" ]; then
+        # Dangling: the symlink exists but its target doesn't. Almost
+        # certainly this repo was re-cloned/moved and the old target path
+        # no longer exists — the same self-correcting pattern used for
+        # opencode.json / CLAUDE.md / the AGENTS.md sync pointer elsewhere
+        # in this script, just never applied to skill symlinks themselves.
+        # A dangling target can never legitimately be someone's intentional
+        # setup, so it's safe to fix without asking.
+        rm "$link_path"
+        ln -s "$skill_dir" "$link_path"
+        relinked=$((relinked + 1))
+      elif [ "$(readlink "$link_path")" != "$skill_dir" ]; then
+        # Valid symlink, but pointing somewhere other than our current
+        # skill_dir and that target actually exists — could be a legitimate
+        # manual setup pointing elsewhere. Ambiguous ownership, same as the
+        # directory-collision case below: don't touch it, just say so.
+        echo "  ⚠️  $skill_name: $link_path is a symlink but points elsewhere ($(readlink "$link_path")) — leaving it as-is."
+      fi
+      # else: already correctly linked, nothing to do
     elif [ -d "$link_path" ]; then
-      echo "  ⚠️  $skill_name: directory already exists at $link_path (not a symlink — skipping)"
+      if diff -rq "$skill_dir" "$link_path" >/dev/null 2>&1; then
+        echo "  ⚠️  $skill_name: an identical, non-symlinked copy already exists at $link_path — looks like a leftover from before this was symlinked. Safe to replace: rm -rf \"$link_path\" && re-run setup.sh."
+      else
+        echo "  ⚠️  $skill_name: a DIFFERENT directory already exists at $link_path — looks like your own custom skill, not ours. Leaving it untouched; it will not receive protocol injections or updates from this repo. Rename one of the two if that's unintentional."
+      fi
       continue
     else
       ln -s "$skill_dir" "$link_path"
       linked=$((linked + 1))
     fi
   done
-  echo "  ✓ $agent_name — $target_dir ($linked new links)"
+  echo "  ✓ $agent_name — $target_dir ($linked new links, $relinked relinked)"
 }
 
 # ── Claude Code ──────────────────────────────────────────────────────────────
