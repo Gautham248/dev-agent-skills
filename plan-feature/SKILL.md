@@ -150,7 +150,38 @@ python3 scripts/verify_plan_paths.py <plan-file.md> <repo-dir>
 
 It errors on any "Files to change" path missing from the repo and any
 "Files to create" path that already exists. Fix the plan and re-run until it
-exits 0 — only then move to Step 6.
+exits 0 — only then move to Step 5b.
+
+## Step 5b — Present the plan and STOP
+
+**This is a required re-invocation of `CLARIFICATION-PROTOCOL.md` Step 3, not
+optional, and not satisfied by whatever go-ahead started this conversation.**
+Whatever the developer confirmed before this skill started was, at best,
+"plan out this feature" — it could not have covered the specific plan
+content just drafted in Step 5, because it didn't exist yet.
+
+Present, in plain language:
+
+- **The plan's shape** — what it covers, in 3–4 bullets (the same summary
+  Step 7 will report), not the full document pasted into the chat.
+- **The output mode** — new issue, comment on issue N, or a plan-only PR —
+  so the developer knows what Step 6 is about to do externally.
+- **Anything Step 5's path verification flagged** as a new file versus an
+  existing one, if that's not obvious from the plan itself.
+
+Then stop and wait for an explicit yes. Do not run any `gh` or `git` command
+from Step 6 until you have one.
+
+**Anti-pattern:** Treating the fact that a plan-and-stop already happened
+earlier in this conversation (per the injected Clarification Protocol,
+before Step 1 of this skill) as covering this step. That earlier
+confirmation authorized planning the feature — it did not and could not
+authorize this specific plan content, since it did not exist yet.
+
+**Anti-pattern:** Skipping this because it's "just a plan, not code." A
+published GitHub issue or an opened PR is a real, visible action the
+developer has to notice and deal with — the same standard as touching a
+file.
 
 ## Step 6 — Save the plan (by output mode)
 
@@ -181,6 +212,34 @@ honest about `useful`/`dead_end`/`corrected`.
 for the cases in the Tests section — just ask." This is a pointer, not an
 automatic hand-off — the feature doesn't exist yet, so `generate-tests`
 has nothing to derive a contract from until implementation begins.
+
+## Step 8 — If the developer asks for changes to the plan
+
+This is a re-entry into the skill, not a fresh planning request — the same
+feature, one revision further along.
+
+**This re-entry is covered by CLARIFICATION-PROTOCOL.md's Step 5 (or
+AGENT-STANDING-RULES.md Rule 3's Step 5, if no skill loaded you here): the
+developer's feedback identifies what's wrong with the plan, it is not
+itself a revised plan and not a yes to publish one.**
+
+1. Incorporate the feedback and revise the plan (back to Step 5). Re-run
+   `verify_plan_paths.py` — a revision can reference a file that wasn't
+   part of the original plan, and it still needs to be verified against the
+   real repo.
+2. **Return to Step 5b.** Present the revised plan and stop, exactly as the
+   first time — do not treat the developer's feedback as authorization for
+   whatever the revision turns out to be. Only after an explicit yes here
+   does Step 6 run again.
+3. Republish per `references/save-destinations.md`'s "Revising a plan"
+   section — this updates the existing issue, comment, or PR from Step 6's
+   first run. **Never create a second issue, comment thread, or PR for the
+   same plan.**
+
+**Anti-pattern:** Treating "change section 3 to use approach X instead" as
+itself sufficient authorization to revise and republish. It identifies what
+should change — Step 5b's plan-and-stop still applies to the actual revised
+content before anything gets published again.
 
 ## If something goes wrong
 

@@ -75,6 +75,8 @@ fi
 
 **If it prints `GRAPH_LOCAL`** (this also covers an older graph built before `.graphify_root` existed — a missing file isn't itself a red flag, only a mismatched one is): confirm it's actually current before querying — a graph built several commits ago and never refreshed can point at code that no longer exists:
 
+Note the honest limit here: a missing `.graphify_root` is treated as local, but that's a default, not proof — a graph copied in from elsewhere without its marker (built by an older `graphify` before this field existed, or stripped during a copy) looks identical to a legitimate older-but-local graph, and `check-update` below only catches staleness, not foreign origin. This case isn't resolved, it's accepted as an open gap.
+
 ```bash
 graphify check-update .
 ```

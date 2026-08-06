@@ -185,6 +185,8 @@ export const fillFeatureACreationForm = async ({
 }) => { ... };
 ```
 
+**Do not introduce page object classes.** This convention is helper-function-based throughout — small, focused, verb-named functions, not `class FeaturePage { ... }` wrappers. Keep it that way unless the repository already has page objects in place; don't mix the two styles in the same suite.
+
 ---
 
 ## 7. Writing the Tests Themselves
@@ -315,3 +317,14 @@ export const setupNavigationForFeatureATestSuite = () => {
 5. Add a `setup*TestSuite()` helper (auth + serial + navigation) and call it at the top of the spec.
 6. Write lifecycle tests in order (create → view → mutate → delete) inside one `describe`; data-verification suites in separate `describe` blocks with pinned config variants.
 7. If the feature has access tiers, add a negative-path suite for the restricted user.
+
+---
+
+## 13. Code Formatting
+
+- **2-space indentation** throughout.
+- **Import order**, blank line between each group: shared constants/enums (`TID`, `LABELS`, `AppPages`) → Playwright core (`test`, `expect`, `type Page`) → local helpers and fixtures → local types.
+- **One assertion per line.** Don't chain multiple `expect(...)` calls or bury an assertion inside a conditional.
+- **Blank line between logical blocks** — between setup and the first action, between each major step of a multi-step test, between helper declarations.
+- **Comments are for the non-obvious only** — a documented `waitForTimeout` workaround, a genuinely surprising ordering requirement. Don't caption straightforward action/assertion pairs; the code should already read like the step list in Section 7.
+- Break long locator chains and multiline objects across lines rather than one dense line — match the wrapping style already used in this document's own code blocks.
