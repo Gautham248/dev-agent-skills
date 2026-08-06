@@ -558,6 +558,41 @@ For any PR with 💬 unresolved reviews, print:
   Action: <what to change, or "reply — outdated after <commit>">
 ```
 
+## Step 10 — If the developer reports a remediation didn't work
+
+This is a re-entry into the skill for one specific PR, not a fresh sync run.
+
+**This re-entry is covered by CLARIFICATION-PROTOCOL.md's Step 5 (or
+AGENT-STANDING-RULES.md Rule 3's Step 5, if no skill loaded you here): the
+developer saying a PR is still red, or that a review comment still isn't
+addressed, is feedback identifying a problem — it is not a plan for the
+next push and not a yes.**
+
+1. **Identify which PR.** If the developer names it, proceed. If the last
+   run touched only one PR needing remediation, that's almost certainly the
+   one — say so rather than asking. If several PRs were remediated and it's
+   genuinely unclear which one the feedback concerns, ask — this is exactly
+   the kind of ambiguity Step 1 of the clarification protocol says is worth
+   a real question, not a guess.
+2. **Reuse the same circuit-breaker session**, not a new one —
+   `pr-<N>-ci-remediation` for that PR number, the same session Step 8b
+   used originally. Starting a fresh session here would let repeated "still
+   doesn't work" feedback bypass the breaker's cumulative attempt cap
+   entirely, which defeats the reason it exists. If the breaker already
+   tripped for this session, it's still tripped — report that plainly
+   rather than resetting it by re-entering here.
+3. **Diagnose and determine the next fix** for this one PR (back through
+   Step 8b's per-attempt logic for just this PR, not the whole batch).
+4. **Present the specific new fix and STOP** — file, change, and what's
+   different from the attempt the developer just rejected. This is scoped
+   to the one PR, not a repeat of Step 7's full batch summary. Only after
+   an explicit yes does anything get committed or pushed.
+
+**Anti-pattern:** Treating "PR #42 is still failing" or "that comment isn't
+actually resolved" as itself sufficient authorization for the next push. It
+identifies what's still wrong — Step 8b's next attempt still needs its own
+presented plan and its own yes, same as the first one did via Step 7.
+
 ## Commit hooks
 
 Auto-fix commits (Step 5d) are ordinary non-merge commits, so any local commit

@@ -58,3 +58,20 @@ Stage only the plan file — never `git add .`.
 
 Report the exact `gh`/git error. Offer a different mode as a fallback only
 if the developer agrees — never silently switch modes.
+
+## Revising a plan after feedback
+
+Update the same artifact Step 6 already created — never create a second one.
+
+- **`new-issue`**: `gh issue edit <number> --body-file <revised-plan-file>` —
+  replaces the issue body with the revised plan.
+- **`comment-on-issue <number>`**: `gh issue comment <number> --repo
+  <owner>/<repo> --body-file <revised-plan-file>` — a new comment carrying
+  the revision. The original comment is left as-is; the thread shows the
+  history.
+- **`file-in-repo`**: commit the revised plan file to the *same* branch
+  (`agent/plan/<feature-slug>-<date>` from the original save) and push
+  again — the existing PR picks up the new commit. Do not open a second PR.
+
+If the original artifact can't be found (issue closed, branch deleted, PR
+merged), stop and ask rather than guessing at a fallback.

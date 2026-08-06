@@ -592,6 +592,19 @@ dead-end check in Step 7 has nothing to check against on the next attempt.**
 3. **Return to Step 7.** Its dead-end check will now correctly flag the
    hypothesis just rejected, because it was just recorded.
 
+   **This re-entry is covered by CLARIFICATION-PROTOCOL.md's Step 5 (or
+   AGENT-STANDING-RULES.md Rule 3's Step 5, if no skill loaded you here):
+   the developer reporting the fix didn't work is feedback, not a plan.**
+   Returning to Step 7 means Step 7b runs again too, in full, exactly as it
+   did the first time — the redetermined fix still gets presented and
+   still requires its own explicit yes before Step 8 or Step 9 touch
+   anything, even though this is now the second (or third) attempt.
+
+   **Anti-pattern:** Treating "that didn't work, try X" as itself
+   sufficient authorization for whatever fix Step 7 determines this time.
+   It identifies the problem with the last attempt — it is not a plan for
+   the next one, and it is not a yes.
+
 4. **If three or more rejected attempts have accumulated on this issue,
    say so before proposing a fourth.** Not a hard stop — but it's a signal
    the bug description may be missing something, or Steps 1–6 need

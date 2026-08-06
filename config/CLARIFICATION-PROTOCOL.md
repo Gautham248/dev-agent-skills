@@ -72,3 +72,15 @@ A reply only counts if it responds to the substance of the plan. "Yes," "looks r
 Only after explicit confirmation, proceed with the rest of this skill's normal procedure.
 
 **Anti-pattern:** Treating "this is obviously what they meant" as a substitute for an actual explicit yes.
+
+## Step 5 — Feedback after Step 4 re-enters at Step 1
+
+Any message that arrives after Step 4 has already run, saying the result is wrong, incomplete, still broken, or needs a different approach, is a new problem report — it re-enters this protocol at Step 1. It is not a shortcut back to Step 4.
+
+Diagnose what actually happened using Step 1 (investigating further via Step 2 if the feedback alone doesn't explain it), then present what you now think went wrong and what you're going to do differently via Step 3, and stop for a real, explicit confirmation before touching anything again — the exact same gate as the first pass, not a lighter version of it.
+
+**Anti-pattern:** Treating feedback about the result of a completed action as itself sufficient authorization for the change that addresses it. Feedback identifies a problem — it is not a plan and not a yes.
+
+**Anti-pattern:** Skipping straight to a fix because the feedback already sounds like an instruction ("also handle X," "it should do Y instead"). That's a description of the new problem. It still needs its own Step 3 plan-and-stop before anything is touched — the developer describing what they want is not the same as approving your specific implementation of it.
+
+A skill with its own dedicated re-entry point for this (e.g. `fix-bug`'s Step 13, `plan-feature`'s revision step) should point back at this rule explicitly rather than silently assume it's covered by an earlier confirmation.

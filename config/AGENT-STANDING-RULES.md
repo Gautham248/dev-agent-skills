@@ -1,6 +1,6 @@
-# Standing rules for any OpenCode session in this environment
+# Standing rules for any AI coding session in this environment
 
-These rules apply to every request, regardless of project, regardless of how simple, routine, or urgent the request looks. They compose alongside any project-specific AGENTS.md — this file does not replace it.
+These rules apply to every request, regardless of harness (OpenCode, Claude Code, or otherwise), regardless of project, regardless of how simple, routine, or urgent the request looks. They compose alongside any project-specific AGENTS.md — this file does not replace it.
 
 <!-- BEGIN dev-agent-skills sync script pointer (managed by setup.sh -- do not edit this block manually; it self-corrects on every `bash setup.sh` run regardless of where this repo is checked out) -->
 Rule 0 below uses this script to manage a project's AGENTS.md: /home/claude/dev-agent-skills/scripts/agents-md-sync.sh
@@ -36,7 +36,10 @@ bash __AGENTS_MD_SYNC_SCRIPT__ write
 ```
 State in one line that you refreshed it because it was out of date, then proceed to Rule 1.
 
-**`AGENTS_TAMPERED`** — a sidecar exists but no longer matches the file's actual content, meaning someone edited this `AGENTS.md` by hand (or some other tool did) after dev-agent-skills last wrote it. Treat this exactly like `AGENTS_FOREIGN` below — do not silently overwrite content someone deliberately changed.
+**`AGENTS_TAMPERED`** — a sidecar exists but no longer matches the file's actual content, meaning someone edited this `AGENTS.md` by hand (or some other tool did) after dev-agent-skills last wrote it. Do not silently overwrite content someone deliberately changed. Follow the same ask-before-acting flow as `AGENTS_FOREIGN` below, with one difference: since this file already carries our rules (just with an edit on top), offer `accept` as the resolution instead of `append` — it re-baselines the sidecar to the file exactly as it stands, touching no content, so the edit stops being flagged on every future session:
+```bash
+bash __AGENTS_MD_SYNC_SCRIPT__ accept
+```
 
 **`AGENTS_FOREIGN`** — an `AGENTS.md` already exists but there's no sidecar at all, meaning dev-agent-skills never wrote it. Most commonly this means another tool's own init/scaffolding command (for example OpenCode's `/init`) wrote one before this environment's skills were set up, or someone hand-wrote one. This file contains none of the rules you are currently reading — no graph-first investigation, no skill-loading, no clarification protocol — and any harness or session that only reads `AGENTS.md` (rather than also receiving these standing rules as instructions, the way this session did) will behave as if none of this exists.
 
@@ -230,6 +233,18 @@ Then explicitly ask the user to confirm — "Want me to go ahead with this?" or 
 Only after explicit, unambiguous confirmation, proceed with the actual change — following the loaded skill's own procedure from this point on.
 
 **Anti-pattern:** Treating "the user clearly wants this" or "this is obviously what they meant" as a substitute for Step 3's actual confirmation. Inferred intent is never a replacement for an explicit yes.
+
+### Step 5 — Feedback after Step 4 re-enters at Step 1
+
+This rule has four steps, but it is not finished the first time Step 4 runs — any message that arrives afterward saying the result is wrong, incomplete, still broken, or needs a different approach is a new problem report, and it re-enters this rule at Step 1. It is not authorization to jump back to Step 4.
+
+Work out what actually happened (Step 1, using Step 2's investigation if the feedback alone doesn't explain it), present what you now believe went wrong and what you're going to do differently (Step 3), and get a real, explicit confirmation before touching anything again. This is the same gate as the first pass through this rule, in full — not an abbreviated version of it because the developer already said yes once.
+
+**Anti-pattern:** Treating feedback about the result of a completed action as itself sufficient authorization for the change that addresses it. Feedback identifies a problem — it is not a plan and not a yes.
+
+**Anti-pattern:** Skipping straight to a fix because the feedback already reads like an instruction ("also handle X," "it should do Y instead"). That's a description of the new problem, not an approved plan — it still needs its own Step 3 before anything is touched.
+
+**Anti-pattern:** A skill's own dedicated re-entry point (e.g. `fix-bug`'s Step 13, or `plan-feature`'s revision step) silently assuming this is covered rather than pointing back at this rule explicitly. If a skill has a place where the developer's feedback on a completed action loops back into more file changes, that place must say so.
 
 ---
 
