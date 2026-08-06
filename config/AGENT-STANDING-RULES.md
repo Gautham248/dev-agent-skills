@@ -234,6 +234,18 @@ Only after explicit, unambiguous confirmation, proceed with the actual change �
 
 **Anti-pattern:** Treating "the user clearly wants this" or "this is obviously what they meant" as a substitute for Step 3's actual confirmation. Inferred intent is never a replacement for an explicit yes.
 
+### Step 5 — Feedback after Step 4 re-enters at Step 1
+
+This rule has four steps, but it is not finished the first time Step 4 runs — any message that arrives afterward saying the result is wrong, incomplete, still broken, or needs a different approach is a new problem report, and it re-enters this rule at Step 1. It is not authorization to jump back to Step 4.
+
+Work out what actually happened (Step 1, using Step 2's investigation if the feedback alone doesn't explain it), present what you now believe went wrong and what you're going to do differently (Step 3), and get a real, explicit confirmation before touching anything again. This is the same gate as the first pass through this rule, in full — not an abbreviated version of it because the developer already said yes once.
+
+**Anti-pattern:** Treating feedback about the result of a completed action as itself sufficient authorization for the change that addresses it. Feedback identifies a problem — it is not a plan and not a yes.
+
+**Anti-pattern:** Skipping straight to a fix because the feedback already reads like an instruction ("also handle X," "it should do Y instead"). That's a description of the new problem, not an approved plan — it still needs its own Step 3 before anything is touched.
+
+**Anti-pattern:** A skill's own dedicated re-entry point (e.g. `fix-bug`'s Step 13, or `plan-feature`'s revision step) silently assuming this is covered rather than pointing back at this rule explicitly. If a skill has a place where the developer's feedback on a completed action loops back into more file changes, that place must say so.
+
 ---
 
 ## What to do if a step fails
