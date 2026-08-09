@@ -488,6 +488,18 @@ if command -v gemini &>/dev/null || [ -d "$HOME/.config/gemini" ]; then
   link_skills "$HOME/.config/gemini/skills" "Gemini CLI"
 fi
 
+# ── Command Code ──────────────────────────────────────────────────────────────
+#
+# Global skills dir per Command Code's own docs (commandcode.ai/docs/skills):
+# ~/.commandcode/skills/, checked ahead of .agents/skills/ and any --skill /
+# settings.json extra locations. `cmd` is the installed binary name (npm
+# package is `command-code`) — a shorter, more collision-prone name than the
+# other harnesses' binaries, so the `-d "$HOME/.commandcode"` fallback here is
+# doing more of the real detection work than it does for the others.
+if command -v cmd &>/dev/null || [ -d "$HOME/.commandcode" ]; then
+  link_skills "$HOME/.commandcode/skills" "Command Code"
+fi
+
 # ── OpenCode (global skills dir) ──────────────────────────────────────────────
 
 if command -v opencode &>/dev/null || [ -d "$HOME/.config/opencode" ]; then

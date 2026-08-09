@@ -152,6 +152,7 @@ for the full rule list.
 | Codex | `mkdir -p ~/.codex/skills && ln -s ~/dev-agent-skills/* ~/.codex/skills/` |
 | Cursor / OpenCode | `mkdir -p .agents/skills && ln -s ~/dev-agent-skills/* .agents/skills/` |
 | Gemini CLI | `mkdir -p ~/.config/gemini/skills && ln -s ~/dev-agent-skills/* ~/.config/gemini/skills/` |
+| Command Code | `mkdir -p ~/.commandcode/skills && ln -s ~/dev-agent-skills/* ~/.commandcode/skills/` |
 
 ## Adding a new skill
 
