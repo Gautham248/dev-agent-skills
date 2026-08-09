@@ -94,6 +94,32 @@ another skill"):
 
 Do not proceed without the repository and feature description.
 
+**Upfront interview.** CLARIFICATION-PROTOCOL.md already forces a stop-and-ask
+when you're genuinely unsure about something — this is different: a fixed
+set of questions asked every time, regardless of whether anything here felt
+uncertain, because these are exactly the constraints a developer knows but
+doesn't think to volunteer unprompted.
+
+```bash
+node plan-feature/scripts/interview-cli.mjs open --repo-root "$REPO_DIR" \
+  --title "<feature description, same wording you'll use for the plan>"
+```
+
+Ask the developer all five questions the command prints (failure modes,
+what must never happen, perf/cost constraints, rollback, explicit
+out-of-scope) alongside whatever Step 1's own questions above still need
+answering. `"n/a"` is a fine answer for a category that genuinely doesn't
+apply — a blank is not, and the script rejects it:
+
+```bash
+node plan-feature/scripts/interview-cli.mjs answer --repo-root "$REPO_DIR" \
+  --title "<same title>" \
+  --failure-modes "<answer>" --must-never "<answer>" \
+  --perf-constraints "<answer>" --rollback "<answer>" --out-of-scope "<answer>"
+```
+
+Do not proceed to Step 5 until this returns `readyToPlan: true`.
+
 ## Steps 2–3 — Clone/pull and build or reuse the knowledge graph
 
 Follow `references/graph-workflow.md`: persistent clone, graph keyed by HEAD
@@ -213,6 +239,20 @@ for the cases in the Tests section — just ask." This is a pointer, not an
 automatic hand-off — the feature doesn't exist yet, so `generate-tests`
 has nothing to derive a contract from until implementation begins.
 
+**Log this session** — same reasoning as fix-bug's Step 12: this is the
+human-readable record a teammate or a cold session reads to find out what
+happened, separate from anything hashed for audit purposes elsewhere.
+
+```bash
+SID=$(node ../scripts/work-log-cli.mjs new-session --prefix plan)
+node ../scripts/work-log-cli.mjs log --repo-root "$REPO_DIR" --session-id "$SID" \
+  --skill plan-feature --requester "<developer who asked for the plan>" \
+  --status done \
+  --summary "<one paragraph: what was planned, output mode, where it landed>" \
+  --repo "<org/repo>" --links "<issue-url / comment-url / pr-url>"
+node ../scripts/work-log-cli.mjs kickoff --repo-root "$REPO_DIR"
+```
+
 ## Step 8 — If the developer asks for changes to the plan
 
 This is a re-entry into the skill, not a fresh planning request — the same
@@ -227,6 +267,22 @@ itself a revised plan and not a yes to publish one.**
    `verify_plan_paths.py` — a revision can reference a file that wasn't
    part of the original plan, and it still needs to be verified against the
    real repo.
+
+   **Record why the plan changed**, before moving on — this is scoped to
+   plan-level revisions specifically, distinct from fix-bug's fix-attempt
+   ledger (which tracks rejected code hypotheses, not plan changes):
+
+   ```bash
+   node scripts/deviation-log-cli.mjs record --repo-root "$REPO_DIR" \
+     --plan-title "<same title used throughout>" \
+     --planned "<what the original plan said>" \
+     --actual "<what the revised plan now says>" \
+     --reason "<the developer's actual reason, close to verbatim>"
+   ```
+
+   A month from now, when the shipped code and the plan disagree, this is
+   what explains why — without it, only the current plan version survives
+   and the reasoning behind the change is gone.
 2. **Return to Step 5b.** Present the revised plan and stop, exactly as the
    first time — do not treat the developer's feedback as authorization for
    whatever the revision turns out to be. Only after an explicit yes here
