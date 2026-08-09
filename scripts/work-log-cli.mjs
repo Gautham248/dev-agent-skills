@@ -12,20 +12,7 @@
 // append-only writes, and rebuilding KICKOFF.md from the log.
 
 import { newSessionId, appendEntry, readCurrent, generateKickoff, WorkLogError } from "./work-log-lib.mjs";
-
-function args(argv) {
-  const out = { _: [] };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a.startsWith("--")) {
-      const key = a.slice(2);
-      const next = argv[i + 1];
-      if (next === undefined || next.startsWith("--")) out[key] = true;
-      else { out[key] = next; i++; }
-    } else out._.push(a);
-  }
-  return out;
-}
+import { parseArgs } from "./arg-parse-lib.mjs";
 
 function die(msg) {
   console.error(`✗ ${msg}`);
@@ -77,7 +64,7 @@ function cmdKickoff(a) {
 }
 
 const [, , cmd, ...rest] = process.argv;
-const a = args(rest);
+const a = parseArgs(rest);
 
 switch (cmd) {
   case "new-session": cmdNewSession(a); break;

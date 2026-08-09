@@ -24,7 +24,8 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
+
+import { normalizeTitle, titleKey as featureKey } from "../../scripts/title-key-lib.mjs";
 
 export class InterviewError extends Error {}
 
@@ -42,17 +43,7 @@ export function interviewDir(repoRoot) {
   return path.join(repoRoot, ".dev-agent", "interviews");
 }
 
-function normalizeTitle(title) {
-  return String(title || "")
-    .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-export function featureKey(title) {
-  return crypto.createHash("sha256").update(normalizeTitle(title)).digest("hex").slice(0, 16);
-}
+export { featureKey };
 
 export function interviewPath(repoRoot, title) {
   return path.join(interviewDir(repoRoot), `${featureKey(title)}.json`);

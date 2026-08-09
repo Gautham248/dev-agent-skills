@@ -21,7 +21,8 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
+
+import { titleKey as planKey } from "../../scripts/title-key-lib.mjs";
 
 export class DeviationError extends Error {}
 
@@ -29,24 +30,7 @@ export function deviationDir(repoRoot) {
   return path.join(repoRoot, ".dev-agent", "deviations");
 }
 
-/**
- * Same normalize-then-hash approach as ledger-lib.mjs's issueKey() -- a
- * plan re-described with slightly different wording should still resolve
- * to the same deviation file, and the hash is safe as a filename
- * regardless of what's in the plan title.
- */
-export function normalizePlanTitle(title) {
-  return String(title || "")
-    .toLowerCase()
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-export function planKey(planTitle) {
-  const normalized = normalizePlanTitle(planTitle);
-  return crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 16);
-}
+export { planKey };
 
 export function deviationPath(repoRoot, planTitle) {
   return path.join(deviationDir(repoRoot), `${planKey(planTitle)}.md`);
