@@ -547,6 +547,52 @@ move on, don't ask again for this same fix. If they say yes, hand off to
 fix-attempt ledger written in Step 9/10 (see `generate-tests/references/ledger-integration.md`)
 rather than needing the bug re-described.
 
+**Log this session.** The fix-attempt ledger deliberately never stores raw
+text (only a hash of the bug description), so it cannot double as a
+human-readable record of what happened. This is that record — written into
+the target repo, not the skills repo, so a teammate opening the project
+later (or a cold session resuming it) has something to read:
+
+```bash
+SID=$(node ../scripts/work-log-cli.mjs new-session --prefix fix)
+node ../scripts/work-log-cli.mjs log --repo-root "$REPO_DIR" --session-id "$SID" \
+  --skill fix-bug --requester "<developer who reported the bug>" \
+  --status done \
+  --summary "<one paragraph: what was reported, what was found, what changed>" \
+  --repo "<org/repo>" --links "<pr-url>"
+node ../scripts/work-log-cli.mjs kickoff --repo-root "$REPO_DIR"
+```
+
+Use `--status blocked` or `--status handed-off` instead of `done` if this
+report-back is anything other than a clean resolution (confidence low,
+waiting on developer input, etc.) — `kickoff` regenerates
+`.dev-agent/KICKOFF.md` from whatever the true status is, and a `done` that
+wasn't actually done defeats the point of the file.
+
+## Step 12b — Confirm shared understanding (quiz-back)
+
+**Only if Step 10 or Step 11 ran.** Why this step exists, and why blank
+answers are rejected rather than defaulted: `references/quiz-back.md`.
+
+```bash
+node scripts/quiz-back-cli.mjs open --repo-root "$REPO_DIR" \
+  --key "<issueKey from Step 9's ledger record>" \
+  --design "<question: the key design choice, and what was deliberately NOT done>" \
+  --edge-case "<question: one edge case this fix does not handle>" \
+  --blast-radius "<question: what else this change could affect>" \
+  --pr-link "<pr-url, if any>"
+```
+
+Ask the developer all three in the same message as Step 12's report, wait
+for real answers (don't fill in plausible ones yourself), then record what
+they actually said:
+
+```bash
+node scripts/quiz-back-cli.mjs answer --repo-root "$REPO_DIR" --key "<same issueKey>" \
+  --design "<developer's answer>" --edge-case "<developer's answer>" \
+  --blast-radius "<developer's answer>"
+```
+
 ## Step 13 — If the developer reports back that the fix didn't work
 
 This is a re-entry into the skill, not a fresh bug report — the same issue,
