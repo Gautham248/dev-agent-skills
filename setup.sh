@@ -248,99 +248,52 @@ inject_protocol_pointers() {
   fi
 }
 
-# ── AGENTS.md sync script pointer ─────────────────────────────────────────────
+# ── Keep this repo's own AGENTS.md in sync with its own canonical rules ─────
 #
-# AGENT-STANDING-RULES.md's Rule 0 invokes scripts/agents-md-sync.sh to manage
-# a project's AGENTS.md. Since that rule runs from inside an arbitrary target
-# project directory (not from within this repo), it needs this script's
-# absolute path, not a relative one — same reasoning as the OpenCode global
-# config above ($standing_rules_path), and the same self-correcting mechanism
-# as inject_protocol_pointers below: strip whatever placeholder/path is
-# already there and rebuild it fresh every run, so a re-clone to a new
-# location just works on the next `bash setup.sh`.
+# AGENT-STANDING-RULES.md's Rule 0 and Rule 0c reference scripts/agents-md-sync.sh
+# and scripts/work-log-cli.mjs by absolute path, since both rules run from
+# inside an arbitrary target project directory — not from within this repo,
+# and not from inside a symlinked skill directory either (that's what makes
+# the relative ../scripts/ convention used inside SKILL.md files inapplicable
+# to either rule). Those placeholders (__AGENTS_MD_SYNC_SCRIPT__,
+# __WORK_LOG_CLI_SCRIPT__) are resolved by agents-md-sync.sh itself, in
+# memory, at the moment it writes AGENTS.md — never here, and never on disk
+# in config/AGENT-STANDING-RULES.md. That keeps the canonical source a
+# stable, byte-identical template on every machine and in every commit, and
+# keeps the sidecar hash (used for tamper detection) always describing
+# exactly what agents-md-sync.sh actually wrote — resolution and hashing now
+# happen on the same in-memory content, in the same step, so they can't
+# drift apart the way a separate direct-edit pass previously could.
+#
+# This repo is its own target project for the purposes of keeping ITS OWN
+# AGENTS.md current, so run the same status-then-write flow here that Rule 0
+# tells an agent to run anywhere else — never force an overwrite of a state
+# that flow itself wouldn't silently overwrite.
 
-inject_agents_md_sync_pointer() {
-  local standing_rules_path="$SKILLS_DIR/config/AGENT-STANDING-RULES.md"
-  local root_agents_path="$SKILLS_DIR/AGENTS.md"
-  local sync_script_path="$SKILLS_DIR/scripts/agents-md-sync.sh"
-
-  if [ ! -f "$standing_rules_path" ]; then
-    echo "  ⚠️  AGENT-STANDING-RULES.md not found at $standing_rules_path — skipping sync-script pointer injection."
+sync_own_agents_md() {
+  local sync_script="$SKILLS_DIR/scripts/agents-md-sync.sh"
+  if [ ! -f "$sync_script" ]; then
+    echo "  ⚠️  agents-md-sync.sh not found at $sync_script — skipping this repo's own AGENTS.md sync."
     return
   fi
-  if [ ! -f "$sync_script_path" ]; then
-    echo "  ⚠️  agents-md-sync.sh not found at $sync_script_path — skipping sync-script pointer injection."
-    return
-  fi
 
-  # Match either the unfilled placeholder (fresh checkout, never run before)
-  # or any previously-injected absolute path (re-run, possibly after a
-  # re-clone to a different location). Process both the canonical source
-  # (config/AGENT-STANDING-RULES.md) and the repo's own root AGENTS.md so
-  # a fresh clone that runs setup.sh has the correct pointer in the file an
-  # agent actually reads, not just in the canonical source.
-  local target tmp
-  for target in "$standing_rules_path" "$root_agents_path"; do
-    if [ ! -f "$target" ]; then
-      continue
-    fi
-    tmp=$(mktemp)
-    awk -v new="$sync_script_path" '
-      /^Rule 0 below uses this script to manage a project.s AGENTS.md: / {
-        print "Rule 0 below uses this script to manage a project'"'"'s AGENTS.md: " new
-        next
-      }
-      { print }
-    ' "$target" > "$tmp" && mv "$tmp" "$target"
-    echo "  ✓ AGENTS.md sync script pointer — $target now points to $sync_script_path"
-  done
+  local self_state
+  self_state=$(cd "$SKILLS_DIR" && bash "$sync_script" status)
+
+  case "$self_state" in
+    NO_AGENTS|AGENTS_OURS_STALE)
+      (cd "$SKILLS_DIR" && bash "$sync_script" write)
+      ;;
+    AGENTS_OURS_FRESH)
+      echo "  ✓ This repo's own AGENTS.md already up to date"
+      ;;
+    AGENTS_TAMPERED|AGENTS_FOREIGN)
+      echo "  ⚠️  This repo's own AGENTS.md is $self_state — not auto-touching. If this is an intentional edit, run: (cd \"$SKILLS_DIR\" && bash scripts/agents-md-sync.sh accept)"
+      ;;
+  esac
 }
 
-inject_agents_md_sync_pointer
-echo ""
-
-# ── Session-history script pointer ────────────────────────────────────────────
-#
-# AGENT-STANDING-RULES.md's Rule 0c invokes scripts/work-log-cli.mjs to
-# initialize and read a project's session history. Same reasoning as Rule 0
-# above: this runs from inside an arbitrary target project directory, not
-# from within this repo, and not from inside a symlinked skill directory
-# either (that's what makes the relative ../scripts/ convention used inside
-# individual SKILL.md files inapplicable here) — so it needs this script's
-# absolute path, injected the same self-correcting way.
-
-inject_work_log_cli_pointer() {
-  local standing_rules_path="$SKILLS_DIR/config/AGENT-STANDING-RULES.md"
-  local root_agents_path="$SKILLS_DIR/AGENTS.md"
-  local work_log_cli_path="$SKILLS_DIR/scripts/work-log-cli.mjs"
-
-  if [ ! -f "$standing_rules_path" ]; then
-    echo "  ⚠️  AGENT-STANDING-RULES.md not found at $standing_rules_path — skipping session-history pointer injection."
-    return
-  fi
-  if [ ! -f "$work_log_cli_path" ]; then
-    echo "  ⚠️  work-log-cli.mjs not found at $work_log_cli_path — skipping session-history pointer injection."
-    return
-  fi
-
-  local target tmp
-  for target in "$standing_rules_path" "$root_agents_path"; do
-    if [ ! -f "$target" ]; then
-      continue
-    fi
-    tmp=$(mktemp)
-    awk -v new="$work_log_cli_path" '
-      /^Rule 0c below uses this script to initialize and read a project.s session history: / {
-        print "Rule 0c below uses this script to initialize and read a project'"'"'s session history: " new
-        next
-      }
-      { print }
-    ' "$target" > "$tmp" && mv "$tmp" "$target"
-    echo "  ✓ Session-history script pointer — $target now points to $work_log_cli_path"
-  done
-}
-
-inject_work_log_cli_pointer
+sync_own_agents_md
 echo ""
 
 inject_protocol_pointers

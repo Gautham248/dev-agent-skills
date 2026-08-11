@@ -2,8 +2,8 @@
 
 These rules apply to every request, regardless of harness (OpenCode, Claude Code, or otherwise), regardless of project, regardless of how simple, routine, or urgent the request looks. They compose alongside any project-specific AGENTS.md — this file does not replace it.
 
-<!-- BEGIN dev-agent-skills sync script pointer (managed by setup.sh -- do not edit this block manually; it self-corrects on every `bash setup.sh` run regardless of where this repo is checked out) -->
-Rule 0 below uses this script to manage a project's AGENTS.md: /home/claude/dev-agent-skills/scripts/agents-md-sync.sh
+<!-- BEGIN dev-agent-skills sync script pointer (placeholder resolved in memory by agents-md-sync.sh's resolve_placeholders at write/append time -- never resolved here, this stays a stable template on every machine and in every commit) -->
+Rule 0 below uses this script to manage a project's AGENTS.md: __AGENTS_MD_SYNC_SCRIPT__
 <!-- END dev-agent-skills sync script pointer -->
 
 ## The governing meta-principle — read this before anything else
@@ -111,7 +111,7 @@ of this session — a "no" is a real answer, not something to retry.
 
 ## Rule 0c — Initialize and read this project's session history
 
-<!-- BEGIN dev-agent-skills work-log script pointer (managed by setup.sh -- do not edit this block manually; it self-corrects on every `bash setup.sh` run regardless of where this repo is checked out) -->
+<!-- BEGIN dev-agent-skills work-log script pointer (placeholder resolved in memory by agents-md-sync.sh's resolve_placeholders at write/append time -- never resolved here, this stays a stable template on every machine and in every commit) -->
 Rule 0c below uses this script to initialize and read a project's session history: __WORK_LOG_CLI_SCRIPT__
 <!-- END dev-agent-skills work-log script pointer -->
 

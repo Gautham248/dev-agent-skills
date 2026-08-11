@@ -73,6 +73,23 @@ require_standing_rules() {
   fi
 }
 
+resolve_placeholders() {
+  # Prints the canonical rules to stdout with the two machine-specific script
+  # pointers substituted in — never touches $STANDING_RULES on disk. This is
+  # the ONLY place either placeholder is ever resolved: config/AGENT-STANDING-RULES.md
+  # stays a stable, byte-identical template on every machine and in every
+  # commit, forever. Resolution and hashing (in cmd_write/cmd_append) happen
+  # on the exact same in-memory content, so the sidecar can never describe
+  # anything other than what's actually on disk in $AGENTS_FILE.
+  require_standing_rules
+  local sync_script_path="$SKILLS_DIR/scripts/agents-md-sync.sh"
+  local work_log_cli_path="$SKILLS_DIR/scripts/work-log-cli.mjs"
+  sed \
+    -e "s|__AGENTS_MD_SYNC_SCRIPT__|$sync_script_path|g" \
+    -e "s|__WORK_LOG_CLI_SCRIPT__|$work_log_cli_path|g" \
+    "$STANDING_RULES"
+}
+
 write_sidecar() {
   # $1 = full-file hash, $2 = canonical-rules hash, at the moment of writing
   {
@@ -132,7 +149,7 @@ cmd_write() {
   esac
 
   require_standing_rules
-  cp "$STANDING_RULES" "$AGENTS_FILE"
+  resolve_placeholders > "$AGENTS_FILE"
   local full_hash canonical_hash
   full_hash=$(hash_file "$AGENTS_FILE")
   canonical_hash=$(hash_file "$STANDING_RULES")
@@ -158,7 +175,7 @@ cmd_append() {
   {
     echo ""
     echo "$BEGIN_MARK"
-    cat "$STANDING_RULES"
+    resolve_placeholders
     echo ""
     echo "$END_MARK"
   } >> "$AGENTS_FILE"
@@ -179,11 +196,29 @@ cmd_accept() {
     exit 1
   fi
 
-  require_standing_rules
-  local full_hash canonical_hash
+  local full_hash stored_canonical
   full_hash=$(hash_file "$AGENTS_FILE")
-  canonical_hash=$(hash_file "$STANDING_RULES")
-  write_sidecar "$full_hash" "$canonical_hash"
+  # accept's job is narrow: "stop flagging THIS content as tampered." It is
+  # not "declare this content in sync with current canonical rules" — those
+  # are different claims, and only the first one is actually being verified
+  # here. Preserve whatever canonical-rules hash was already tracked (if a
+  # sidecar existed at all, i.e. AGENTS_TAMPERED) so a genuine rules change
+  # still correctly surfaces as AGENTS_OURS_STALE on the next status check,
+  # instead of being masked as fresh. Recomputing it fresh here was the bug:
+  # it let a later `write` see "canonical hash already matches" and skip a
+  # real resync that should have happened.
+  if [ -f "$SIDECAR_FILE" ]; then
+    stored_canonical=$(sed -n '2p' "$SIDECAR_FILE")
+  else
+    # AGENTS_FOREIGN case: no prior sidecar, so there is no prior canonical
+    # baseline to preserve — this content has no relationship to canonical
+    # rules at all yet. Fall back to the current canonical hash; the first
+    # `status` after any real rules change will correctly report STALE from
+    # that point forward, which is the best available baseline here.
+    require_standing_rules
+    stored_canonical=$(hash_file "$STANDING_RULES")
+  fi
+  write_sidecar "$full_hash" "$stored_canonical"
 
   case "$state" in
     AGENTS_TAMPERED)
