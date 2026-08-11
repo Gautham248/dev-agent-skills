@@ -67,36 +67,104 @@ Do **not** silently proceed as if this file were equivalent to your own standing
 
 ## Rule 0b — Offer to gitignore local tooling artifacts
 
-Immediately after Rule 0, before Rule 1: check whether this project's
-`.gitignore` already lists `graphify-out/`:
+Immediately after Rule 0, before Rule 0c: check whether this project's
+`.gitignore` already lists both `graphify-out/` (the local knowledge graph
+and its build artifacts) and `.dev-agent/` (session history, fix-attempt
+ledger, and other local tooling state — see Rule 0c):
 
 ```bash
-test -f .gitignore && grep -q "graphify-out" .gitignore && echo "ALREADY_IGNORED" || echo "NOT_IGNORED"
+NEEDED=""
+{ test -f .gitignore && grep -q "graphify-out" .gitignore; } || NEEDED="${NEEDED}graphify-out/ "
+{ test -f .gitignore && grep -q "\.dev-agent" .gitignore; } || NEEDED="${NEEDED}.dev-agent/ "
+if [ -z "$NEEDED" ]; then echo "ALL_IGNORED"; else echo "NEEDED: $NEEDED"; fi
 ```
 
-**If it prints `NOT_IGNORED`:** ask once, as a single closed question: "This
-project doesn't gitignore `graphify-out/` yet (the local knowledge graph and
-its build artifacts) — want me to add it?" Add the entry only after an
-explicit yes. If `.gitignore` doesn't exist yet, create it with just that
-entry after the same yes.
+**If it prints `NEEDED: ...`:** ask once, as a single closed question naming
+whichever entries are actually missing — e.g. "This project doesn't
+gitignore `.dev-agent/` yet (session history and local tooling state) —
+want me to add it?" or, if both are missing, name both in the same
+question rather than asking twice. Add only the entries the check actually
+reported missing, after an explicit yes. If `.gitignore` doesn't exist yet,
+create it with just those entries after the same yes.
 
-**If it prints `ALREADY_IGNORED`:** proceed to Rule 1, say nothing.
+**If it prints `ALL_IGNORED`:** proceed to Rule 0c, say nothing.
 
-**If the answer is no:** proceed to Rule 1. Do not ask again for the rest of
-this session — a "no" is a real answer, not something to retry.
+**If the answer is no:** proceed to Rule 0c. Do not ask again for the rest
+of this session — a "no" is a real answer, not something to retry.
 
 ### Anti-patterns — explicitly forbidden for Rule 0b
 
-- Adding the `.gitignore` entry without asking first, even though it's a
+- Adding either `.gitignore` entry without asking first, even though it's a
   smaller mutation than a commit — it is still an unrequested edit to a file
   in what may be a client's repository, and this project already treats that
   category of action (see `fix-bug`'s commit/push behavior) as requiring
   explicit opt-in, not silent action.
+- Asking two separate questions (one for `graphify-out/`, one for
+  `.dev-agent/`) when both are missing. One combined question, naming both.
 - Asking again in the same session after a "no." One answer covers the whole
   session.
-- Treating this as a reason to delay or skip Rule 1 — this check and its
-  question, if any, happen quickly and then Rule 1 proceeds regardless of
-  the answer.
+- Treating this as a reason to delay or skip Rule 0c or Rule 1 — this check
+  and its question, if any, happen quickly and then the sequence proceeds
+  regardless of the answer.
+
+---
+
+## Rule 0c — Initialize and read this project's session history
+
+<!-- BEGIN dev-agent-skills work-log script pointer (managed by setup.sh -- do not edit this block manually; it self-corrects on every `bash setup.sh` run regardless of where this repo is checked out) -->
+Rule 0c below uses this script to initialize and read a project's session history: __WORK_LOG_CLI_SCRIPT__
+<!-- END dev-agent-skills work-log script pointer -->
+
+Immediately after Rule 0b, before Rule 1. This is what makes session
+continuity automatic instead of dependent on a specific skill being
+invoked — the fix-attempt ledger and quiz-back only apply once fix-bug is
+running, but every session, regardless of what it turns out to be about,
+benefits from knowing what happened last time.
+
+```bash
+node __WORK_LOG_CLI_SCRIPT__ init --repo-root .
+cat .dev-agent/KICKOFF.md
+```
+
+`init` is idempotent — safe to run every session, every time, same posture
+as Rule 1's graph-prep. On a repo with no `.dev-agent/` yet, it creates
+`.dev-agent/work-log/` and writes a placeholder `KICKOFF.md` saying plainly
+that there's no prior history yet. On a repo that already has real session
+history, it changes nothing and reports how many sessions are on record.
+Either way, the `cat` that follows always has something valid to read.
+
+Hold what `KICKOFF.md` contains in context for the rest of this session, so
+a question like "what did we last work on" or "where did we leave off" can
+be answered directly from it — without the user needing to invoke a skill
+or paste the file in themselves. **Only do this once per session, at the
+very first request** — not on every subsequent message in an ongoing
+conversation. If this session's own work later updates
+`.dev-agent/KICKOFF.md` (via fix-bug's Step 6b/12 or plan-feature's Step
+7), that reflects on disk for next time; there's no need to re-read it
+mid-session since you already know what you changed.
+
+### Anti-patterns — explicitly forbidden for Rule 0c
+
+- Waiting for the user to explicitly ask "what did we last talk about"
+  before checking. By then it's too late to have context ready — run `init`
+  and read the file unconditionally, at the start, same as Rule 1's graph
+  prep never waits to be asked either.
+- Asking permission before running `init` or reading `KICKOFF.md`. `init`
+  only ever creates a placeholder if nothing exists, or reports and changes
+  nothing if something does — never destructive, never a reason to ask,
+  same as Rule 1's graph query needing no confirmation.
+- Skipping this because the project has no `.dev-agent/` yet, or assuming
+  that means there's nothing to do. No-history is itself a valid, expected
+  first-run state that `init` handles — it is not a reason to skip the
+  rule, the same way "no graph yet" in Rule 1 is a reason to build one, not
+  a reason to skip graph-prep entirely.
+- Re-running `init` or re-reading `KICKOFF.md` on every turn within the
+  same session. Once is enough — after that, the content is already in
+  context.
+- Treating this rule as satisfied by a skill's own logging step (fix-bug's
+  Step 6b/12, plan-feature's Step 7). Those steps *write* to the file; this
+  rule is what makes sure something also *reads* it, regardless of which
+  skill — if any — ends up being invoked for the actual request.
 
 ---
 

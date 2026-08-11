@@ -299,6 +299,50 @@ inject_agents_md_sync_pointer() {
 inject_agents_md_sync_pointer
 echo ""
 
+# ── Session-history script pointer ────────────────────────────────────────────
+#
+# AGENT-STANDING-RULES.md's Rule 0c invokes scripts/work-log-cli.mjs to
+# initialize and read a project's session history. Same reasoning as Rule 0
+# above: this runs from inside an arbitrary target project directory, not
+# from within this repo, and not from inside a symlinked skill directory
+# either (that's what makes the relative ../scripts/ convention used inside
+# individual SKILL.md files inapplicable here) — so it needs this script's
+# absolute path, injected the same self-correcting way.
+
+inject_work_log_cli_pointer() {
+  local standing_rules_path="$SKILLS_DIR/config/AGENT-STANDING-RULES.md"
+  local root_agents_path="$SKILLS_DIR/AGENTS.md"
+  local work_log_cli_path="$SKILLS_DIR/scripts/work-log-cli.mjs"
+
+  if [ ! -f "$standing_rules_path" ]; then
+    echo "  ⚠️  AGENT-STANDING-RULES.md not found at $standing_rules_path — skipping session-history pointer injection."
+    return
+  fi
+  if [ ! -f "$work_log_cli_path" ]; then
+    echo "  ⚠️  work-log-cli.mjs not found at $work_log_cli_path — skipping session-history pointer injection."
+    return
+  fi
+
+  local target tmp
+  for target in "$standing_rules_path" "$root_agents_path"; do
+    if [ ! -f "$target" ]; then
+      continue
+    fi
+    tmp=$(mktemp)
+    awk -v new="$work_log_cli_path" '
+      /^Rule 0c below uses this script to initialize and read a project.s session history: / {
+        print "Rule 0c below uses this script to initialize and read a project'"'"'s session history: " new
+        next
+      }
+      { print }
+    ' "$target" > "$tmp" && mv "$tmp" "$target"
+    echo "  ✓ Session-history script pointer — $target now points to $work_log_cli_path"
+  done
+}
+
+inject_work_log_cli_pointer
+echo ""
+
 inject_protocol_pointers
 echo ""
 

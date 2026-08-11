@@ -7,11 +7,12 @@
 //           [--repo <org/repo>] [--links <a,b,c>] [--next-action <text>]
 //   current --repo-root <d>
 //   kickoff --repo-root <d> [--recent <n>]
+//   init    --repo-root <d>
 //
 // The model supplies the summary/next-action text; this handles filenames,
 // append-only writes, and rebuilding KICKOFF.md from the log.
 
-import { newSessionId, appendEntry, readCurrent, generateKickoff, WorkLogError } from "./work-log-lib.mjs";
+import { newSessionId, appendEntry, readCurrent, generateKickoff, ensureInitialized, WorkLogError } from "./work-log-lib.mjs";
 import { parseArgs } from "./arg-parse-lib.mjs";
 
 function die(msg) {
@@ -63,6 +64,16 @@ function cmdKickoff(a) {
   console.log(`✓ wrote ${file}`);
 }
 
+function cmdInit(a) {
+  const repoRoot = requireRepoRoot(a);
+  const { alreadyInitialized, workLogDir, sessionCount } = ensureInitialized(repoRoot);
+  if (alreadyInitialized) {
+    console.log(`✓ already initialized — ${workLogDir} (${sessionCount} session(s) on record)`);
+  } else {
+    console.log(`✓ initialized ${workLogDir} — first session in this repo`);
+  }
+}
+
 const [, , cmd, ...rest] = process.argv;
 const a = parseArgs(rest);
 
@@ -71,7 +82,8 @@ switch (cmd) {
   case "log": cmdLog(a); break;
   case "current": cmdCurrent(a); break;
   case "kickoff": cmdKickoff(a); break;
+  case "init": cmdInit(a); break;
   default:
-    console.error("usage: work-log-cli.mjs <new-session|log|current|kickoff> [options]");
+    console.error("usage: work-log-cli.mjs <new-session|log|current|kickoff|init> [options]");
     process.exit(1);
 }
