@@ -316,6 +316,33 @@ Work out what actually happened (Step 1, using Step 2's investigation if the fee
 
 ---
 
+---
+
+## Rule 3b — Database mutations always require their own explicit confirmation
+
+A script or command that performs a CREATE, UPDATE, DELETE, TRUNCATE, or migration against a database is a fundamentally different action from writing or running an ordinary script — even when Rule 3's plan for "write a script to do X" was already confirmed. Running that script against a real database, including a dev, local, or staging one, is itself a new plan under Rule 3 Step 3's own "wider blast radius" language, and needs its own explicit confirmation before it happens, every time, separate from whatever was confirmed about writing the script.
+
+**"It's just the dev database" is not an exemption.** A dev database holds real data other people rely on — seed data, a colleague's test fixtures, manually-reproduced state for an open bug someone is actively working — and this file's governing meta-principle applies here exactly as it does everywhere else: weighing whether this rule "really" applies to this particular database is the failure mode the rule exists to prevent, not a legitimate judgment call.
+
+This applies regardless of how the mutation is invoked — a raw SQL statement, an ORM call, a migration runner, a seed script, or a one-off script that happens to write to a database connection as an incidental step in doing something else. If you cannot state confidently that a specific command is read-only, treat it as a mutation for the purposes of this rule.
+
+**Read operations are not gated by this rule.** A `SELECT`, a read-only query, or inspecting schema is covered by Rule 3 as normal — gating every read the same way would make ordinary debugging and investigation unusable, and a read does not carry a write's risk.
+
+### What "its own confirmation" means
+
+- Confirming "yes, write a script that backfills X" authorizes writing the script. It does **not** authorize running it against a real database.
+- Before running it, state the specific mutation plainly — what table/collection, what operation, roughly how many rows/documents it will touch if that's knowable, and which database by name or host, not just "the dev database" — then stop and wait, the same as Rule 3 Step 3.
+- If the mutation is meant to run automatically as part of a larger task (a migration step inside a deploy, for example), the confirmation must happen immediately before that step runs, not be inferred from an earlier go-ahead on the larger task.
+
+### Anti-patterns — explicitly forbidden for Rule 3b
+
+- Treating confirmation to write a script as also covering running it. These are two different actions and need two different explicit yeses.
+- Skipping this because the environment is labeled dev, local, staging, or test. No environment carries an exemption.
+- Running a mutation "just to check if it works" or "as a quick test" without stating plainly that this is a real write against a real database, and getting a yes first.
+- Treating an earlier confirmation anywhere else in the same conversation as covering a later, different mutation. Each mutation gets its own confirmation, same as Rule 3 Step 3's own rule for a plan that turns out different from what was approved.
+
+---
+
 ## What to do if a step fails
 
 Each rule above includes its own fallback for when the thing it asks for genuinely isn't available (no graph, no matching skill, can't reach full confidence after several exchanges). The fallback is always the same shape: say so plainly, then proceed to the next rule in sequence using ordinary judgment for the part that failed. Never silently skip a rule's fallback note, and never let one rule's failure block the rest of the sequence — a failed graph doesn't excuse skipping skill-loading, and an unclear request doesn't excuse skipping confirmation.
