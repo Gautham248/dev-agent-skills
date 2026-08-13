@@ -291,15 +291,18 @@ inject_protocol_pointers() {
 #
 # This repo's own AGENTS.md is a generated artifact, not a hand-maintained
 # file: its source of truth is config/AGENT-STANDING-RULES.md, and its
-# resolved script paths are machine-specific. Regenerate it unconditionally
-# (write --force) so a re-clone to a new location — or a machine whose
-# committed AGENTS.md carries someone else's absolute paths — self-corrects
-# on every `bash setup.sh` run. The content-hash FRESH check is the wrong
-# gate here: the sidecar's full_hash describes whatever machine last wrote
-# the file, not whether the file is right for this one, so a "fresh" file can
-# still carry the wrong paths. Because it is regenerated here, the resolved
-# AGENTS.md (not the placeholder template) is what the OpenCode and Claude
-# Code global-config blocks below point their instructions/imports at.
+# resolved script paths are machine-specific. Both AGENTS.md and its
+# .agents-md.sha256 sidecar are gitignored here (see .gitignore) for exactly
+# that reason — committing them would ship one developer's absolute paths and
+# churn on every other machine's setup run. Regenerate unconditionally
+# (write --force) so a re-clone to a new location — or a machine whose local
+# AGENTS.md carries someone else's absolute paths — self-corrects on every
+# `bash setup.sh` run. The content-hash FRESH check is the wrong gate here:
+# the sidecar's full_hash describes whatever machine last wrote the file, not
+# whether the file is right for this one, so a "fresh" file can still carry
+# the wrong paths. Because it is regenerated here, the resolved AGENTS.md
+# (not the placeholder template) is what the OpenCode and Claude Code
+# global-config blocks below point their instructions/imports at.
 
 sync_own_agents_md() {
   local sync_script="$SKILLS_DIR/scripts/agents-md-sync.sh"

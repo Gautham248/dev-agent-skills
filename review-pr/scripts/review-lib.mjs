@@ -40,6 +40,22 @@ export const DEFAULT_MIN_CONFIDENCE = 0.6;
  */
 export const DEFAULT_MAX_FINDINGS = 15;
 
+/**
+ * A PR at or above this many changed files gets the broad architect-pass
+ * check (Step 2b) in addition to the normal per-lens diff review, on the
+ * theory that a change this size is unlikely to be a single localized fix.
+ */
+export const DEFAULT_ARCHITECT_FILE_THRESHOLD = 10;
+
+/**
+ * A PR touching at least this many distinct architecture-context subsystems
+ * also gets the architect-pass check, even under the file-count threshold —
+ * catches a broad, cross-cutting change that happens to touch few files
+ * (e.g. one line changed in each of four different subsystems' entry
+ * points) that DEFAULT_ARCHITECT_FILE_THRESHOLD alone would miss.
+ */
+export const DEFAULT_ARCHITECT_SUBSYSTEM_THRESHOLD = 3;
+
 // ---------------------------------------------------------------------------
 // Unified diff parsing
 // ---------------------------------------------------------------------------
@@ -739,6 +755,83 @@ export function sortFindings(findings) {
 }
 
 // ---------------------------------------------------------------------------
+// Architect-pass (Step 2b) — broad-scope coverage findings
+// ---------------------------------------------------------------------------
+//
+// A "coverage" finding is a different kind of object from a line-anchored
+// finding above: it says a subsystem this PR's feature would plausibly need
+// was never touched, not that a specific line is wrong. There is no diff
+// line to anchor it to, so it deliberately does NOT reuse validateFinding /
+// dedupeFindings (both anchor-based) or the blocker/should/nit severity
+// scale (first-principles-review's, reused verbatim elsewhere in this file —
+// coverage isn't a point on that scale, it's a different axis entirely, so
+// giving it its own vocabulary avoids diluting that one).
+
+/**
+ * Decides whether Step 2b's architect-pass check runs at all. Pure and
+ * threshold-based on purpose — the actual "does this look like a broad,
+ * multi-component feature" judgment happens inside the check itself (an
+ * LLM reasoning step), not here. This function only decides whether that
+ * more expensive step is worth invoking for this particular PR.
+ */
+export function shouldRunArchitectCheck({
+  changedFilesCount,
+  matchedSubsystemCount,
+  fileThreshold = DEFAULT_ARCHITECT_FILE_THRESHOLD,
+  subsystemThreshold = DEFAULT_ARCHITECT_SUBSYSTEM_THRESHOLD,
+}) {
+  const files = Number(changedFilesCount) || 0;
+  const subsystems = Number(matchedSubsystemCount) || 0;
+  return files >= fileThreshold || subsystems >= subsystemThreshold;
+}
+
+/**
+ * A coverage finding names a subsystem the diff didn't touch, so it cannot
+ * carry `file`/`line`/`evidence` — validateFinding would reject it on
+ * exactly those grounds, correctly, since those fields mean something
+ * different for a line comment. This is the parallel, deliberately smaller
+ * check: just enough structure that renderSummary can trust it.
+ */
+export function validateCoverageFinding(finding) {
+  const errors = [];
+  const f = finding || {};
+
+  if (f.type !== "coverage") errors.push('`type` must be "coverage"');
+  if (!f.subsystem || typeof f.subsystem !== "string" || f.subsystem.trim() === "") {
+    errors.push("missing `subsystem`");
+  }
+  if (!f.rationale || typeof f.rationale !== "string" || f.rationale.trim().length < 15) {
+    errors.push("`rationale` must explain why the omission is suspicious, not just name the subsystem");
+  }
+  if (typeof f.confidence !== "number" || f.confidence < 0 || f.confidence > 1) {
+    errors.push("`confidence` must be a number between 0 and 1");
+  }
+
+  return { ok: errors.length === 0, errors };
+}
+
+/**
+ * Two lens passes (or two runs of the architect check within the same
+ * session) can independently flag the same subsystem. Keep one entry per
+ * subsystem, preferring the higher-confidence rationale — unlike
+ * dedupeFindings, there's no anchor to merge multiple lenses onto, so this
+ * doesn't accumulate a confidence boost from corroboration the way
+ * dedupeFindings does; it just picks the stronger of the two.
+ */
+export function dedupeCoverageFindings(findings) {
+  const bySubsystem = new Map();
+  for (const f of findings) {
+    const key = String(f.subsystem || "").trim().toLowerCase();
+    if (!key) continue;
+    const existing = bySubsystem.get(key);
+    if (!existing || f.confidence > existing.confidence) {
+      bySubsystem.set(key, f);
+    }
+  }
+  return [...bySubsystem.values()];
+}
+
+// ---------------------------------------------------------------------------
 // Review event resolution (the self-review 422 guard)
 // ---------------------------------------------------------------------------
 
@@ -868,6 +961,7 @@ export function renderSummary({
   lensReport,
   prMeta = {},
   eventDecision,
+  architectureReview = null,
 }) {
   const counts = { blocker: 0, should: 0, nit: 0 };
   for (const f of findings) counts[f.severity]++;
@@ -884,6 +978,45 @@ export function renderSummary({
   if (eventDecision?.downgraded) {
     out.push(`> ${eventDecision.reason}`);
     out.push("");
+  }
+
+  // Broad-scope architect pass (Step 2b) — only present for PRs that
+  // crossed DEFAULT_ARCHITECT_FILE_THRESHOLD or DEFAULT_ARCHITECT_SUBSYSTEM_THRESHOLD.
+  // Placed before the per-lens breakdown deliberately: this is the
+  // highest-level observation about the PR ("did this touch what a change
+  // like this should touch"), and reads better as framing for what follows
+  // than as one more item buried after the line-level findings.
+  if (architectureReview) {
+    out.push("### Architecture review");
+    out.push("");
+    if (architectureReview.narrative) {
+      out.push(architectureReview.narrative.trim());
+      out.push("");
+    }
+    if (architectureReview.subsystemsTouched?.length) {
+      out.push(`**Subsystems touched:** ${architectureReview.subsystemsTouched.join(", ")}`);
+      out.push("");
+    }
+    const coverageFindings = architectureReview.coverageFindings || [];
+    if (coverageFindings.length) {
+      out.push("**Possibly missing:**");
+      out.push("");
+      for (const f of coverageFindings) {
+        out.push(`- **${f.subsystem}** (${Math.round(f.confidence * 100)}% confidence) — ${f.rationale.trim()}`);
+      }
+      out.push("");
+    } else {
+      out.push(
+        "_No coverage gaps flagged — the subsystems this PR would plausibly need all appear to be touched._"
+      );
+      out.push("");
+    }
+    if (architectureReview.heldCoverageCount) {
+      out.push(
+        `_${architectureReview.heldCoverageCount} low-confidence coverage observation(s) held back, reviewer-only._`
+      );
+      out.push("");
+    }
   }
 
   const hasLensInfo =

@@ -23,9 +23,9 @@
 #   agents-md-sync.sh accept   # re-baseline the sidecar to whatever AGENTS.md
 #                               # currently contains, without touching the file.
 #                               # For a deliberate hand-edit of a file we
-#                               # generated (AGENTS_TAMPERED), or a pre-existing
-#                               # foreign file the team decides to keep as-is
-#                               # (AGENTS_FOREIGN) rather than merge into.
+#                               # generated (AGENTS_TAMPERED). Refuses on
+#                               # AGENTS_FOREIGN — a foreign file has no baseline
+#                               # to re-baseline; use 'append' there instead.
 #
 # States printed by `status`:
 #   NO_AGENTS          — no AGENTS.md in this project yet
@@ -85,9 +85,16 @@ resolve_placeholders() {
   require_standing_rules
   local sync_script_path="$SKILLS_DIR/scripts/agents-md-sync.sh"
   local work_log_cli_path="$SKILLS_DIR/scripts/work-log-cli.mjs"
+  # Escape each path before using it as a sed replacement: a checkout path
+  # containing &, \, or the | delimiter would otherwise corrupt the resolved
+  # output. The placeholder patterns themselves are literal, so only the
+  # replacement values need escaping.
+  local sync_esc work_esc
+  sync_esc=$(printf '%s' "$sync_script_path" | sed 's/[\\&|]/\\&/g')
+  work_esc=$(printf '%s' "$work_log_cli_path" | sed 's/[\\&|]/\\&/g')
   sed \
-    -e "s|__AGENTS_MD_SYNC_SCRIPT__|$sync_script_path|g" \
-    -e "s|__WORK_LOG_CLI_SCRIPT__|$work_log_cli_path|g" \
+    -e "s|__AGENTS_MD_SYNC_SCRIPT__|$sync_esc|g" \
+    -e "s|__WORK_LOG_CLI_SCRIPT__|$work_esc|g" \
     "$STANDING_RULES"
 }
 
@@ -202,37 +209,27 @@ cmd_accept() {
     echo "No $AGENTS_FILE exists yet — nothing to accept. Use 'write' to create one." >&2
     exit 1
   fi
+  if [ "$state" = "AGENTS_FOREIGN" ]; then
+    echo "Nothing to accept — a foreign $AGENTS_FILE has no dev-agent-skills baseline to re-baseline (accept is for a file we wrote that was then hand-edited). Use 'append' to merge the rules in, or leave the file as-is; it will keep reporting AGENTS_FOREIGN." >&2
+    exit 1
+  fi
 
   local full_hash stored_canonical
   full_hash=$(hash_file "$AGENTS_FILE")
   # accept's job is narrow: "stop flagging THIS content as tampered." It is
   # not "declare this content in sync with current canonical rules" — those
   # are different claims, and only the first one is actually being verified
-  # here. Preserve whatever canonical-rules hash was already tracked (if a
-  # sidecar existed at all, i.e. AGENTS_TAMPERED) so a genuine rules change
-  # still correctly surfaces as AGENTS_OURS_STALE on the next status check,
-  # instead of being masked as fresh. Recomputing it fresh here was the bug:
-  # it let a later `write` see "canonical hash already matches" and skip a
-  # real resync that should have happened.
-  if [ -f "$SIDECAR_FILE" ]; then
-    stored_canonical=$(sed -n '2p' "$SIDECAR_FILE")
-  else
-    # AGENTS_FOREIGN case: no prior sidecar, so there is no prior canonical
-    # baseline to preserve — this content has no relationship to canonical
-    # rules at all yet. Fall back to the current canonical hash; the first
-    # `status` after any real rules change will correctly report STALE from
-    # that point forward, which is the best available baseline here.
-    require_standing_rules
-    stored_canonical=$(hash_file "$STANDING_RULES")
-  fi
+  # here. Preserve the canonical-rules hash already tracked in the sidecar so
+  # a genuine rules change still correctly surfaces as AGENTS_OURS_STALE on
+  # the next status check, instead of being masked as fresh. Recomputing it
+  # fresh here was the bug: it let a later `write` see "canonical hash already
+  # matches" and skip a real resync that should have happened.
+  stored_canonical=$(sed -n '2p' "$SIDECAR_FILE")
   write_sidecar "$full_hash" "$stored_canonical"
 
   case "$state" in
     AGENTS_TAMPERED)
       echo "Accepted the current $AGENTS_FILE as the new baseline (was: $state). Content left exactly as it is -- whoever edited it, that edit is now the tracked version. Future status checks will treat this as ours until it's edited again."
-      ;;
-    AGENTS_FOREIGN)
-      echo "Accepted the current $AGENTS_FILE as the new baseline (was: $state). Content left exactly as it is -- note this file still contains none of dev-agent-skills' standing rules, since 'accept' only changes what gets tracked, not what the file says. Run 'append' instead if you actually want the rules merged in."
       ;;
     *)
       echo "Accepted the current $AGENTS_FILE as the new baseline (was: $state)."

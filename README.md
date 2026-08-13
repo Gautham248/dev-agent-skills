@@ -8,6 +8,7 @@ in your AI IDE instantly.
 <!-- BEGIN dev-agent-skills skills table (managed by scripts/regen-readme.mjs -- do not edit this block by hand, edit the source SKILL.md instead and re-run setup.sh) -->
 | Skill | What it does |
 |---|---|
+| [`architecture-context`](./architecture-context/) | Use to answer "what kind of system is this project, architecturally" -- not "what does this diff do" (that's… |
 | [`coding-standards`](./coding-standards/) | Company coding standards for frontend, backend, and database work. Use whenever writing or modifying applicat… |
 | [`coding-standards-backend`](./coding-standards-backend/) | Company backend conventions for API endpoints, middleware, and background jobs -- file-based endpoint structu… |
 | [`coding-standards-database`](./coding-standards-database/) | Company database conventions -- schema-as-source-of-truth, model/field naming, column type rules (decimal mon… |

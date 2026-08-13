@@ -96,17 +96,17 @@ print('instructions:', d.get('instructions', 'MISSING'))
 **Expected:**
 ```
 skill[*]: allow
-instructions: ['/home/<you>/dev-agent-skills/config/AGENT-STANDING-RULES.md']
+instructions: ['/home/<you>/dev-agent-skills/AGENTS.md']
 ```
 
 **If `MISSING` for either:** `jq` was not available during setup. Install `jq` and re-run `bash setup.sh`.
 
-### 4. OpenCode actually reads AGENT-STANDING-RULES.md
+### 4. OpenCode actually reads AGENTS.md
 
 This cannot be verified by a file check alone. Verify behaviorally: start an OpenCode session in any project directory and send this message:
 
 ```
-Without doing anything else, quote the first sentence of Rule 1 from AGENT-STANDING-RULES.md
+Without doing anything else, quote the first sentence of Rule 1 from AGENTS.md
 ```
 
 **Expected response:** The agent quotes something about checking for `graphify-out/graph.json` before investigating in any other way.

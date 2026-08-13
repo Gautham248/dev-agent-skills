@@ -171,18 +171,18 @@ You should see something like:
     }
   },
   "instructions": [
-    "/home/<you>/10xMinds/AI-Dev-Agent/dev-agent-skills/config/AGENT-STANDING-RULES.md"
+    "/home/<you>/10xMinds/AI-Dev-Agent/dev-agent-skills/AGENTS.md"
   ]
 }
 ```
 
-The critical fields are `instructions[]` containing the path to `AGENT-STANDING-RULES.md` and `permission.skill["*"] = "allow"`. If either is missing, `jq` was not available when `setup.sh` ran — install `jq` and re-run.
+The critical fields are `instructions[]` containing the path to this repo's generated `AGENTS.md` (not `config/AGENT-STANDING-RULES.md`, which is the unresolved placeholder template) and `permission.skill["*"] = "allow"`. If either is missing, `jq` was not available when `setup.sh` ran — install `jq` and re-run.
 
 Confirm OpenCode is actually reading the file (not just that the path is registered):
 
 ```bash
 # Start an OpenCode session in any directory, then ask:
-# "Quote the first sentence of Rule 1 from AGENT-STANDING-RULES.md"
+# "Quote the first sentence of Rule 1 from AGENTS.md"
 ```
 
 If it can quote it verbatim, the file is genuinely loaded. If it says it can't find it or makes something up, the path in `opencode.json` points somewhere wrong — usually a re-clone to a different location. Re-run `setup.sh` from the new location to self-correct the path.
