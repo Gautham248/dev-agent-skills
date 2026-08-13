@@ -18,6 +18,7 @@
 # skills repo). Usage:
 #   agents-md-sync.sh status   # prints one state word, see below, exit 0 always
 #   agents-md-sync.sh write    # create AGENTS.md, or refresh it if stale (case 1 / case 3)
+#                              #   --force regenerates unconditionally, even when FRESH
 #   agents-md-sync.sh append   # merge into an existing foreign AGENTS.md (case 2)
 #   agents-md-sync.sh accept   # re-baseline the sidecar to whatever AGENTS.md
 #                               # currently contains, without touching the file.
@@ -137,8 +138,14 @@ cmd_write() {
       : # proceed below
       ;;
     AGENTS_OURS_FRESH)
-      echo "AGENTS.md is already up to date — nothing to do."
-      return 0
+      if [ "$force" != "--force" ]; then
+        echo "AGENTS.md is already up to date — nothing to do."
+        return 0
+      fi
+      # --force: fall through and regenerate. The on-disk content's hash can
+      # match its own committed sidecar while still carrying a different
+      # machine's absolute script paths (the full_hash is machine-dependent),
+      # so FRESH alone cannot prove the file is right for THIS machine.
       ;;
     AGENTS_FOREIGN|AGENTS_TAMPERED)
       if [ "$force" != "--force" ]; then

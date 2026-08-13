@@ -15,3 +15,6 @@ __pycache__/
 
 # Graphify cost tracking (per-user, not project data)
 cost.json
+
+# Session history and local tooling state
+.dev-agent/
