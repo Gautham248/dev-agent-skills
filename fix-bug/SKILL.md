@@ -76,6 +76,19 @@ This decision determines how much of Steps 2–4 and 8–11 below actually apply
 Say explicitly which mode you're in before proceeding, so the developer can
 correct you if you guessed wrong.
 
+**A note on script paths used throughout this skill.** Several steps below
+run commands like `node ../scripts/work-log-cli.mjs ...` (root-level shared
+scripts) or `node scripts/quiz-back-cli.mjs ...` (this skill's own scripts).
+Both forms are correct as written — including the relative `../scripts/`
+form, confirmed to resolve correctly through the symlinked skill directory
+every harness's `setup.sh` installation creates, regardless of where that
+symlink itself points to. **Run the command exactly as documented.** If it's
+not obvious where a file lives, that's not a reason to guess at an alternate
+path and report the script as unavailable when the guess comes up empty —
+run the literal command first. If it genuinely fails, report the actual
+error message, not a conclusion drawn from checking a different path than
+the one documented.
+
 ## Step 1 — Gather information
 
 Ask the developer for:

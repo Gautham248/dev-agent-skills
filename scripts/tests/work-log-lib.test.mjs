@@ -15,6 +15,7 @@ import {
   readCurrent,
   listSessions,
   generateKickoff,
+  ensureInitialized,
   workLogDir,
   currentPath,
   kickoffPath,
@@ -204,5 +205,56 @@ describe("generateKickoff", () => {
     // should not appear in the recent-sessions section.
     const recentSection = content.split("## Recent sessions")[1] || "";
     assert.doesNotMatch(recentSection, /Oldest\./);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("ensureInitialized", () => {
+  test("on a repo with no .dev-agent/ at all, creates it and writes placeholders", () => {
+    const repo = tmpRepo();
+    assert.equal(fs.existsSync(workLogDir(repo)), false);
+    const result = ensureInitialized(repo);
+    assert.equal(result.alreadyInitialized, false);
+    assert.equal(result.sessionCount, 0);
+    assert.ok(fs.existsSync(currentPath(repo)));
+    assert.ok(fs.existsSync(kickoffPath(repo)));
+    assert.match(fs.readFileSync(currentPath(repo), "utf8"), /No sessions logged yet/);
+    assert.match(fs.readFileSync(kickoffPath(repo), "utf8"), /No prior session history/);
+  });
+
+  test("is idempotent — calling it twice on a fresh repo doesn't change anything the second time", () => {
+    const repo = tmpRepo();
+    ensureInitialized(repo);
+    const firstCurrent = fs.readFileSync(currentPath(repo), "utf8");
+    const result = ensureInitialized(repo);
+    assert.equal(result.alreadyInitialized, true);
+    assert.equal(fs.readFileSync(currentPath(repo), "utf8"), firstCurrent);
+  });
+
+  test("does NOT overwrite real session content that already exists", () => {
+    const repo = tmpRepo();
+    appendEntry(repo, { ...BASE_ENTRY, sessionId: "s-1", summary: "Real work happened here." });
+    const before = fs.readFileSync(currentPath(repo), "utf8");
+    const result = ensureInitialized(repo);
+    assert.equal(result.alreadyInitialized, true);
+    assert.equal(result.sessionCount, 1);
+    assert.equal(fs.readFileSync(currentPath(repo), "utf8"), before);
+    assert.match(before, /Real work happened here\./);
+  });
+
+  test("does not touch fix-attempts/, quiz/, interviews/, or deviations/ — those stay lazy", () => {
+    const repo = tmpRepo();
+    ensureInitialized(repo);
+    for (const dir of ["fix-attempts", "quiz", "interviews", "deviations"]) {
+      assert.equal(fs.existsSync(path.join(repo, ".dev-agent", dir)), false);
+    }
+  });
+
+  test("sessionCount reflects real sessions, not just file existence", () => {
+    const repo = tmpRepo();
+    appendEntry(repo, { ...BASE_ENTRY, sessionId: "s-1" });
+    appendEntry(repo, { ...BASE_ENTRY, sessionId: "s-2" });
+    const result = ensureInitialized(repo);
+    assert.equal(result.sessionCount, 2);
   });
 });

@@ -81,6 +81,18 @@ operating on a persistent clone (`/app/data/repos/<owner>__<repo>`)?
 
 Say which mode you're in before proceeding.
 
+**A note on script paths used throughout this skill.** Steps below run
+commands like `node ../scripts/work-log-cli.mjs ...` (root-level shared
+scripts) and `node scripts/interview-cli.mjs ...` / `node
+scripts/deviation-log-cli.mjs ...` (this skill's own scripts). All forms
+are correct as written — the relative `../scripts/` form is confirmed to
+resolve correctly through the symlinked skill directory every harness's
+`setup.sh` installation creates. **Run the command exactly as documented.**
+If it's not obvious where a file lives, that's not a reason to guess an
+alternate path and report the script unavailable when the guess comes up
+empty — run the literal command first, and report the actual error if it
+genuinely fails.
+
 ## Step 1 — Gather information
 
 Ask the developer for whatever wasn't already supplied (see "When invoked by

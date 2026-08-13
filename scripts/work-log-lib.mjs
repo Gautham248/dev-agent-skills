@@ -165,6 +165,51 @@ export function readCurrent(repoRoot) {
 }
 
 /**
+ * Called unconditionally at the start of every session (AGENT-STANDING-RULES.md
+ * Rule 0c), in an arbitrary target repo -- not just repos someone already
+ * happened to run fix-bug/plan-feature in. Idempotent: safe to call every
+ * session, every time, same posture as Rule 1's graph-prep. Does nothing
+ * destructive if .dev-agent/work-log/ already has real content -- only fills
+ * in what's missing.
+ *
+ * Deliberately does NOT touch .dev-agent/fix-attempts/, quiz/, interviews/,
+ * or deviations/ -- those stay lazily created on first real write, same as
+ * today. An empty directory sitting there with nothing in it has no value;
+ * work-log/ is different because Rule 0c needs something to READ, not just
+ * a place things could eventually go.
+ */
+export function ensureInitialized(repoRoot) {
+  const dir = workLogDir(repoRoot);
+  const alreadyInitialized = fs.existsSync(dir);
+  fs.mkdirSync(dir, { recursive: true });
+
+  const curPath = currentPath(repoRoot);
+  if (!fs.existsSync(curPath)) {
+    fs.writeFileSync(
+      curPath,
+      "# Current state\n\n_No sessions logged yet in this repo._\n"
+    );
+  }
+
+  const koPath = kickoffPath(repoRoot);
+  if (!fs.existsSync(koPath)) {
+    fs.mkdirSync(path.dirname(koPath), { recursive: true });
+    fs.writeFileSync(
+      koPath,
+      "# KICKOFF — resume this project\n\n" +
+        "No prior session history — this is the first dev-agent-skills " +
+        "session in this repo. Once a session logs something (fix-bug's " +
+        "Step 6b/12, or plan-feature's Step 7), this file is regenerated " +
+        "with real content on the next `kickoff` call.\n"
+    );
+  }
+
+  const sessionCount = listSessions(repoRoot, { limit: 1000 }).length;
+
+  return { alreadyInitialized, workLogDir: dir, sessionCount };
+}
+
+/**
  * CURRENT.md's own content starts with its own "# Current state" header
  * (it's a standalone file meant to be readable on its own). generateKickoff()
  * embeds that same content under its own "## Current state" heading -- strip
