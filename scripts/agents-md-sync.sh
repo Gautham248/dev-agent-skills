@@ -18,13 +18,14 @@
 # skills repo). Usage:
 #   agents-md-sync.sh status   # prints one state word, see below, exit 0 always
 #   agents-md-sync.sh write    # create AGENTS.md, or refresh it if stale (case 1 / case 3)
+#                              #   --force regenerates unconditionally, even when FRESH
 #   agents-md-sync.sh append   # merge into an existing foreign AGENTS.md (case 2)
 #   agents-md-sync.sh accept   # re-baseline the sidecar to whatever AGENTS.md
 #                               # currently contains, without touching the file.
 #                               # For a deliberate hand-edit of a file we
-#                               # generated (AGENTS_TAMPERED), or a pre-existing
-#                               # foreign file the team decides to keep as-is
-#                               # (AGENTS_FOREIGN) rather than merge into.
+#                               # generated (AGENTS_TAMPERED). Refuses on
+#                               # AGENTS_FOREIGN — a foreign file has no baseline
+#                               # to re-baseline; use 'append' there instead.
 #
 # States printed by `status`:
 #   NO_AGENTS          — no AGENTS.md in this project yet
@@ -71,6 +72,30 @@ require_standing_rules() {
     echo "agents-md-sync.sh: canonical file not found at $STANDING_RULES" >&2
     exit 2
   fi
+}
+
+resolve_placeholders() {
+  # Prints the canonical rules to stdout with the two machine-specific script
+  # pointers substituted in — never touches $STANDING_RULES on disk. This is
+  # the ONLY place either placeholder is ever resolved: config/AGENT-STANDING-RULES.md
+  # stays a stable, byte-identical template on every machine and in every
+  # commit, forever. Resolution and hashing (in cmd_write/cmd_append) happen
+  # on the exact same in-memory content, so the sidecar can never describe
+  # anything other than what's actually on disk in $AGENTS_FILE.
+  require_standing_rules
+  local sync_script_path="$SKILLS_DIR/scripts/agents-md-sync.sh"
+  local work_log_cli_path="$SKILLS_DIR/scripts/work-log-cli.mjs"
+  # Escape each path before using it as a sed replacement: a checkout path
+  # containing &, \, or the | delimiter would otherwise corrupt the resolved
+  # output. The placeholder patterns themselves are literal, so only the
+  # replacement values need escaping.
+  local sync_esc work_esc
+  sync_esc=$(printf '%s' "$sync_script_path" | sed 's/[\\&|]/\\&/g')
+  work_esc=$(printf '%s' "$work_log_cli_path" | sed 's/[\\&|]/\\&/g')
+  sed \
+    -e "s|__AGENTS_MD_SYNC_SCRIPT__|$sync_esc|g" \
+    -e "s|__WORK_LOG_CLI_SCRIPT__|$work_esc|g" \
+    "$STANDING_RULES"
 }
 
 write_sidecar() {
@@ -120,8 +145,14 @@ cmd_write() {
       : # proceed below
       ;;
     AGENTS_OURS_FRESH)
-      echo "AGENTS.md is already up to date — nothing to do."
-      return 0
+      if [ "$force" != "--force" ]; then
+        echo "AGENTS.md is already up to date — nothing to do."
+        return 0
+      fi
+      # --force: fall through and regenerate. The on-disk content's hash can
+      # match its own committed sidecar while still carrying a different
+      # machine's absolute script paths (the full_hash is machine-dependent),
+      # so FRESH alone cannot prove the file is right for THIS machine.
       ;;
     AGENTS_FOREIGN|AGENTS_TAMPERED)
       if [ "$force" != "--force" ]; then
@@ -132,7 +163,7 @@ cmd_write() {
   esac
 
   require_standing_rules
-  cp "$STANDING_RULES" "$AGENTS_FILE"
+  resolve_placeholders > "$AGENTS_FILE"
   local full_hash canonical_hash
   full_hash=$(hash_file "$AGENTS_FILE")
   canonical_hash=$(hash_file "$STANDING_RULES")
@@ -158,7 +189,7 @@ cmd_append() {
   {
     echo ""
     echo "$BEGIN_MARK"
-    cat "$STANDING_RULES"
+    resolve_placeholders
     echo ""
     echo "$END_MARK"
   } >> "$AGENTS_FILE"
@@ -178,19 +209,27 @@ cmd_accept() {
     echo "No $AGENTS_FILE exists yet — nothing to accept. Use 'write' to create one." >&2
     exit 1
   fi
+  if [ "$state" = "AGENTS_FOREIGN" ]; then
+    echo "Nothing to accept — a foreign $AGENTS_FILE has no dev-agent-skills baseline to re-baseline (accept is for a file we wrote that was then hand-edited). Use 'append' to merge the rules in, or leave the file as-is; it will keep reporting AGENTS_FOREIGN." >&2
+    exit 1
+  fi
 
-  require_standing_rules
-  local full_hash canonical_hash
+  local full_hash stored_canonical
   full_hash=$(hash_file "$AGENTS_FILE")
-  canonical_hash=$(hash_file "$STANDING_RULES")
-  write_sidecar "$full_hash" "$canonical_hash"
+  # accept's job is narrow: "stop flagging THIS content as tampered." It is
+  # not "declare this content in sync with current canonical rules" — those
+  # are different claims, and only the first one is actually being verified
+  # here. Preserve the canonical-rules hash already tracked in the sidecar so
+  # a genuine rules change still correctly surfaces as AGENTS_OURS_STALE on
+  # the next status check, instead of being masked as fresh. Recomputing it
+  # fresh here was the bug: it let a later `write` see "canonical hash already
+  # matches" and skip a real resync that should have happened.
+  stored_canonical=$(sed -n '2p' "$SIDECAR_FILE")
+  write_sidecar "$full_hash" "$stored_canonical"
 
   case "$state" in
     AGENTS_TAMPERED)
       echo "Accepted the current $AGENTS_FILE as the new baseline (was: $state). Content left exactly as it is -- whoever edited it, that edit is now the tracked version. Future status checks will treat this as ours until it's edited again."
-      ;;
-    AGENTS_FOREIGN)
-      echo "Accepted the current $AGENTS_FILE as the new baseline (was: $state). Content left exactly as it is -- note this file still contains none of dev-agent-skills' standing rules, since 'accept' only changes what gets tracked, not what the file says. Run 'append' instead if you actually want the rules merged in."
       ;;
     *)
       echo "Accepted the current $AGENTS_FILE as the new baseline (was: $state)."

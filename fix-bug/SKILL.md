@@ -76,6 +76,19 @@ This decision determines how much of Steps 2–4 and 8–11 below actually apply
 Say explicitly which mode you're in before proceeding, so the developer can
 correct you if you guessed wrong.
 
+**A note on script paths used throughout this skill.** Several steps below
+run commands like `node ../scripts/work-log-cli.mjs ...` (root-level shared
+scripts) or `node scripts/quiz-back-cli.mjs ...` (this skill's own scripts).
+Both forms are correct as written — including the relative `../scripts/`
+form, confirmed to resolve correctly through the symlinked skill directory
+every harness's `setup.sh` installation creates, regardless of where that
+symlink itself points to. **Run the command exactly as documented.** If it's
+not obvious where a file lives, that's not a reason to guess at an alternate
+path and report the script as unavailable when the guess comes up empty —
+run the literal command first. If it genuinely fails, report the actual
+error message, not a conclusion drawn from checking a different path than
+the one documented.
+
 ## Step 1 — Gather information
 
 Ask the developer for:
@@ -251,7 +264,38 @@ the project's actual conventions:
 If one applies, follow its conventions for the fix below. If none apply,
 proceed with Step 7 using only this skill's own guardrails.
 
+## Step 6b — If investigation concludes there's no bug to fix
+
+If Steps 4–6 turn up no actual defect — the described behavior is already
+correct, or (as with a key-parity check between locale files) there's
+simply nothing to find — this is a valid, complete outcome, not a reason
+to force a fix or a reason to just answer in chat and leave no trace. Why
+this is distinct from Step 7's "can't determine the fix with confidence":
+`references/no-bug-found.md`.
+
+1. Report back directly: what was checked, what was found, why nothing
+   needs changing.
+2. Log the session — this is where fix-bug's fix-and-report path (Step 12)
+   would normally record it, and a clean negative result deserves the same
+   record a positive one gets:
+
+```bash
+SID=$(node ../scripts/work-log-cli.mjs new-session --prefix fix)
+node ../scripts/work-log-cli.mjs log --repo-root "$REPO_DIR" --session-id "$SID" \
+  --skill fix-bug --requester "<developer who asked>" --status done \
+  --summary "<what was checked, and why nothing needed changing>" \
+  --repo "<org/repo>"
+node ../scripts/work-log-cli.mjs kickoff --repo-root "$REPO_DIR"
+```
+
+**Do not** call the fix-attempt ledger or open a quiz-back — both track an
+actual change, and there isn't one. End the run here; do not continue to
+Step 7.
+
 ## Step 7 — Determine the fix
+
+**Only reached if Step 6b did not apply** — i.e. investigation found an
+actual bug, even if the correct fix isn't obvious yet.
 
 **Before proposing anything, check whether this hypothesis is already a
 known dead end** — see `references/fix-attempt-ledger.md` for why this

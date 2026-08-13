@@ -248,55 +248,49 @@ inject_protocol_pointers() {
   fi
 }
 
-# ── AGENTS.md sync script pointer ─────────────────────────────────────────────
+# ── Keep this repo's own AGENTS.md in sync with its own canonical rules ─────
 #
-# AGENT-STANDING-RULES.md's Rule 0 invokes scripts/agents-md-sync.sh to manage
-# a project's AGENTS.md. Since that rule runs from inside an arbitrary target
-# project directory (not from within this repo), it needs this script's
-# absolute path, not a relative one — same reasoning as the OpenCode global
-# config above ($standing_rules_path), and the same self-correcting mechanism
-# as inject_protocol_pointers below: strip whatever placeholder/path is
-# already there and rebuild it fresh every run, so a re-clone to a new
-# location just works on the next `bash setup.sh`.
+# AGENT-STANDING-RULES.md's Rule 0 and Rule 0c reference scripts/agents-md-sync.sh
+# and scripts/work-log-cli.mjs by absolute path, since both rules run from
+# inside an arbitrary target project directory — not from within this repo,
+# and not from inside a symlinked skill directory either (that's what makes
+# the relative ../scripts/ convention used inside SKILL.md files inapplicable
+# to either rule). Those placeholders (__AGENTS_MD_SYNC_SCRIPT__,
+# __WORK_LOG_CLI_SCRIPT__) are resolved by agents-md-sync.sh itself, in
+# memory, at the moment it writes AGENTS.md — never here, and never on disk
+# in config/AGENT-STANDING-RULES.md. That keeps the canonical source a
+# stable, byte-identical template on every machine and in every commit, and
+# keeps the sidecar hash (used for tamper detection) always describing
+# exactly what agents-md-sync.sh actually wrote — resolution and hashing now
+# happen on the same in-memory content, in the same step, so they can't
+# drift apart the way a separate direct-edit pass previously could.
+#
+# This repo's own AGENTS.md is a generated artifact, not a hand-maintained
+# file: its source of truth is config/AGENT-STANDING-RULES.md, and its
+# resolved script paths are machine-specific. Both AGENTS.md and its
+# .agents-md.sha256 sidecar are gitignored here (see .gitignore) for exactly
+# that reason — committing them would ship one developer's absolute paths and
+# churn on every other machine's setup run. Regenerate unconditionally
+# (write --force) so a re-clone to a new location — or a machine whose local
+# AGENTS.md carries someone else's absolute paths — self-corrects on every
+# `bash setup.sh` run. The content-hash FRESH check is the wrong gate here:
+# the sidecar's full_hash describes whatever machine last wrote the file, not
+# whether the file is right for this one, so a "fresh" file can still carry
+# the wrong paths. Because it is regenerated here, the resolved AGENTS.md
+# (not the placeholder template) is what the OpenCode and Claude Code
+# global-config blocks below point their instructions/imports at.
 
-inject_agents_md_sync_pointer() {
-  local standing_rules_path="$SKILLS_DIR/config/AGENT-STANDING-RULES.md"
-  local root_agents_path="$SKILLS_DIR/AGENTS.md"
-  local sync_script_path="$SKILLS_DIR/scripts/agents-md-sync.sh"
-
-  if [ ! -f "$standing_rules_path" ]; then
-    echo "  ⚠️  AGENT-STANDING-RULES.md not found at $standing_rules_path — skipping sync-script pointer injection."
+sync_own_agents_md() {
+  local sync_script="$SKILLS_DIR/scripts/agents-md-sync.sh"
+  if [ ! -f "$sync_script" ]; then
+    echo "  ⚠️  agents-md-sync.sh not found at $sync_script — skipping this repo's own AGENTS.md sync."
     return
   fi
-  if [ ! -f "$sync_script_path" ]; then
-    echo "  ⚠️  agents-md-sync.sh not found at $sync_script_path — skipping sync-script pointer injection."
-    return
-  fi
 
-  # Match either the unfilled placeholder (fresh checkout, never run before)
-  # or any previously-injected absolute path (re-run, possibly after a
-  # re-clone to a different location). Process both the canonical source
-  # (config/AGENT-STANDING-RULES.md) and the repo's own root AGENTS.md so
-  # a fresh clone that runs setup.sh has the correct pointer in the file an
-  # agent actually reads, not just in the canonical source.
-  local target tmp
-  for target in "$standing_rules_path" "$root_agents_path"; do
-    if [ ! -f "$target" ]; then
-      continue
-    fi
-    tmp=$(mktemp)
-    awk -v new="$sync_script_path" '
-      /^Rule 0 below uses this script to manage a project.s AGENTS.md: / {
-        print "Rule 0 below uses this script to manage a project'"'"'s AGENTS.md: " new
-        next
-      }
-      { print }
-    ' "$target" > "$tmp" && mv "$tmp" "$target"
-    echo "  ✓ AGENTS.md sync script pointer — $target now points to $sync_script_path"
-  done
+  (cd "$SKILLS_DIR" && bash "$sync_script" write --force)
 }
 
-inject_agents_md_sync_pointer
+sync_own_agents_md
 echo ""
 
 inject_protocol_pointers
@@ -309,9 +303,14 @@ configure_opencode_global() {
     return  # OpenCode isn't installed/used on this machine — nothing to do
   fi
 
-  local standing_rules_path="$SKILLS_DIR/config/AGENT-STANDING-RULES.md"
-  if [ ! -f "$standing_rules_path" ]; then
-    echo "  ⚠️  AGENT-STANDING-RULES.md not found at $standing_rules_path — skipping OpenCode global config."
+  # Point at this repo's own resolved AGENTS.md (regenerated by
+  # sync_own_agents_md above), NOT config/AGENT-STANDING-RULES.md: the
+  # template still carries unresolved __AGENTS_MD_SYNC_SCRIPT__ /
+  # __WORK_LOG_CLI_SCRIPT__ placeholders, and loading those verbatim into
+  # every session's instructions would make Rule 0's literal command fail.
+  local resolved_rules_path="$SKILLS_DIR/AGENTS.md"
+  if [ ! -f "$resolved_rules_path" ]; then
+    echo "  ⚠️  AGENTS.md not found at $resolved_rules_path — skipping OpenCode global config."
     return
   fi
 
@@ -322,7 +321,7 @@ configure_opencode_global() {
   if ! command -v jq &>/dev/null; then
     echo "  ⚠️  OpenCode global config — jq not found, cannot safely merge into $config_path."
     echo "      Add this manually (merge with whatever is already there, don't just overwrite it):"
-    echo "      { \"permission\": { \"skill\": { \"*\": \"allow\" }, \"task\": \"ask\", \"external_directory\": { \"$SKILLS_DIR/*\": \"allow\" } }, \"instructions\": [\"$standing_rules_path\"] }"
+    echo "      { \"permission\": { \"skill\": { \"*\": \"allow\" }, \"task\": \"ask\", \"external_directory\": { \"$SKILLS_DIR/*\": \"allow\" } }, \"instructions\": [\"$resolved_rules_path\"] }"
     return
   fi
 
@@ -332,7 +331,7 @@ configure_opencode_global() {
 
   local tmp
   tmp=$(mktemp)
-  jq --arg instr "$standing_rules_path" --arg skillsglob "$SKILLS_DIR/*" '
+  jq --arg instr "$resolved_rules_path" --arg skillsglob "$SKILLS_DIR/*" '
     .permission = (.permission // {}) |
     .permission.skill = (.permission.skill // {}) |
     .permission.skill["*"] = "allow" |
@@ -362,9 +361,10 @@ echo ""
 #
 # ~/.claude/CLAUDE.md is Claude Code's "User instructions" scope — loaded at
 # the start of every session, in every project, on this machine, same as
-# OpenCode's instructions[] above. We inject an absolute-path import of
-# AGENT-STANDING-RULES.md there via the same strip_managed_block idiom used
-# for SKILL.md, so it self-corrects if this repo is re-cloned elsewhere.
+# OpenCode's instructions[] above. We inject an absolute-path import of this
+# repo's own resolved AGENTS.md (not the placeholder template — see
+# sync_own_agents_md) via the same strip_managed_block idiom used for
+# SKILL.md, so it self-corrects if this repo is re-cloned elsewhere.
 #
 # Deliberately NOT using --append-system-prompt: that flag has to be passed
 # on every single invocation, which conflicts with "clone and run setup.sh,
@@ -381,9 +381,11 @@ configure_claude_code_global() {
     return  # Claude Code isn't installed/used on this machine — nothing to do
   fi
 
-  local standing_rules_path="$SKILLS_DIR/config/AGENT-STANDING-RULES.md"
-  if [ ! -f "$standing_rules_path" ]; then
-    echo "  ⚠️  AGENT-STANDING-RULES.md not found at $standing_rules_path — skipping Claude Code global config."
+  # Same reasoning as configure_opencode_global: import this repo's own
+  # resolved AGENTS.md, not the placeholder-bearing template.
+  local resolved_rules_path="$SKILLS_DIR/AGENTS.md"
+  if [ ! -f "$resolved_rules_path" ]; then
+    echo "  ⚠️  AGENTS.md not found at $resolved_rules_path — skipping Claude Code global config."
     return
   fi
 
@@ -403,12 +405,12 @@ configure_claude_code_global() {
     cat "$stripped"
     echo ""
     echo "$begin"
-    echo "@$standing_rules_path"
+    echo "@$resolved_rules_path"
     echo "$end"
   } | cat -s > "$claude_md"
   rm -f "$stripped"
 
-  echo "  ✓ Claude Code global config — $claude_md imports $standing_rules_path (loads every session, every project, via Claude Code's User instructions scope)"
+  echo "  ✓ Claude Code global config — $claude_md imports $resolved_rules_path (loads every session, every project, via Claude Code's User instructions scope)"
 }
 
 configure_claude_code_global
