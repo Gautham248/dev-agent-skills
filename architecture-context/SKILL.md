@@ -75,6 +75,17 @@ matching subsystem(s), not the whole cache. If no files are relevant yet
 (a `plan-feature` session exploring a not-yet-written area), omit them and
 this skill returns every subsystem it currently knows about.
 
+**A note on script paths.** Every `node --input-type=module -e` command below
+imports `architecture-context-lib.mjs`, written as
+`<ARCH_DIR>/scripts/architecture-context-lib.mjs`. Substitute the absolute
+path of this skill's directory for `<ARCH_DIR>` — the harness that loaded
+this skill supplies it (its "Base directory"), the same way `review-pr`'s and
+`fix-bug`'s scripts resolve. The import must be an absolute path: Node
+resolves inline `-e` imports against the current working directory (the
+target repo), not the skill directory, so a bare relative path would resolve
+into the wrong repo and fail. Run the commands exactly as written, with
+`<ARCH_DIR>` substituted.
+
 ## Step 1 -- Locate the graph, don't rebuild it
 
 Resolve `graphify-out/` relative to the current working directory, same
@@ -99,7 +110,7 @@ cache was last written:
 
 ```bash
 node --input-type=module -e "
-import { getGraphMtimeIso, loadCache, checkCacheTier1 } from '<path to architecture-context/scripts/architecture-context-lib.mjs>';
+import { getGraphMtimeIso, loadCache, checkCacheTier1 } from '<ARCH_DIR>/scripts/architecture-context-lib.mjs';
 const graphMtime = getGraphMtimeIso('graphify-out/graph.json');
 const cache = loadCache('graphify-out/.project-architecture.json');
 console.log(checkCacheTier1(cache, graphMtime));
@@ -130,7 +141,7 @@ generated from for this reason:
 
 ```bash
 node --input-type=module -e "
-import { loadCache, getChangedFilesSince } from '<path>/architecture-context-lib.mjs';
+import { loadCache, getChangedFilesSince } from '<ARCH_DIR>/scripts/architecture-context-lib.mjs';
 const cache = loadCache('graphify-out/.project-architecture.json');
 const changed = getChangedFilesSince('.', cache.generated_from_git_sha);
 console.log(JSON.stringify(changed));
@@ -158,7 +169,7 @@ returns, then:
 
 ```bash
 node --input-type=module -e "
-import { loadCache, computeStaleSubsystems } from '<path>/architecture-context-lib.mjs';
+import { loadCache, computeStaleSubsystems } from '<ARCH_DIR>/scripts/architecture-context-lib.mjs';
 const cache = loadCache('graphify-out/.project-architecture.json');
 const { stale, fresh } = computeStaleSubsystems(cache.subsystems, <the unioned file list>);
 console.log(JSON.stringify({ stale, fresh }));
@@ -166,9 +177,27 @@ console.log(JSON.stringify({ stale, fresh }));
 ```
 
 If `stale` is empty: nothing changed that any known subsystem's anchor
-files touch. Refresh the cache's top-level `generated_from_graph_mtime` /
-`generated_from_git_sha` (so the next Step 2 check is `fresh` again)
-without regenerating any subsystem content, and go to Step 5.
+files touch. Persist just the refreshed top-level fields — an empty
+`updates` object, which `mergeSubsystemUpdates` carries every existing
+subsystem through byte-for-byte — so the next Step 2 check is `fresh`
+again:
+
+```bash
+node --input-type=module -e "
+import { loadCache, mergeSubsystemUpdates, writeCache, getHeadSha, getGraphMtimeIso } from '<ARCH_DIR>/scripts/architecture-context-lib.mjs';
+const cache = loadCache('graphify-out/.project-architecture.json');
+const result = mergeSubsystemUpdates({
+  cache,
+  updates: {},
+  graphMtimeIso: getGraphMtimeIso('graphify-out/graph.json'),
+  gitSha: getHeadSha('.'),
+  nowIso: new Date().toISOString(),
+});
+writeCache('graphify-out/.project-architecture.json', result);
+"
+```
+
+Then go to Step 5.
 
 If `stale` is non-empty: go to Step 4, but only for the subsystem ids in
 `stale`. Everything in `fresh` is carried over unchanged.
@@ -201,7 +230,7 @@ community structure this reads.
 ```bash
 node --input-type=module -e "
 import fs from 'node:fs';
-import { communitiesToSubsystemSeeds } from '<path>/architecture-context-lib.mjs';
+import { communitiesToSubsystemSeeds } from '<ARCH_DIR>/scripts/architecture-context-lib.mjs';
 const graph = JSON.parse(fs.readFileSync('graphify-out/graph.json', 'utf8'));
 const analysis = JSON.parse(fs.readFileSync('graphify-out/.graphify_analysis.json', 'utf8'));
 let labels = null;
@@ -275,7 +304,7 @@ Assemble an `updates` object keyed by subsystem id (only the ids you just
 
 ```bash
 node --input-type=module -e "
-import { loadCache, mergeSubsystemUpdates, writeCache, getHeadSha, getGraphMtimeIso } from '<path>/architecture-context-lib.mjs';
+import { loadCache, mergeSubsystemUpdates, writeCache, getHeadSha, getGraphMtimeIso } from '<ARCH_DIR>/scripts/architecture-context-lib.mjs';
 const cache = loadCache('graphify-out/.project-architecture.json');
 const graphMtimeIso = getGraphMtimeIso('graphify-out/graph.json');
 const gitSha = getHeadSha('.');
@@ -302,7 +331,7 @@ If the caller passed a target file list, narrow to just what's relevant:
 
 ```bash
 node --input-type=module -e "
-import { loadCache, selectSubsystemsForFiles } from '<path>/architecture-context-lib.mjs';
+import { loadCache, selectSubsystemsForFiles } from '<ARCH_DIR>/scripts/architecture-context-lib.mjs';
 const cache = loadCache('graphify-out/.project-architecture.json');
 console.log(JSON.stringify(selectSubsystemsForFiles(cache.subsystems, <target files>), null, 2));
 "
