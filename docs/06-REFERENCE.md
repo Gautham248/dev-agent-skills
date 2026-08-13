@@ -394,7 +394,7 @@ Not currently wired into CI — running it is a manual step (see `01-SETUP.md`, 
 ### OpenCode
 
 - Skills are invoked via the tab-key skill picker, **not** as slash commands typed in chat
-- `AGENT-STANDING-RULES.md` is loaded unconditionally via `instructions[]` in `opencode.json` — it applies to every session regardless of which project is open
+- This repo's generated `AGENTS.md` (resolved from `config/AGENT-STANDING-RULES.md` by `setup.sh`) is loaded unconditionally via `instructions[]` in `opencode.json` — it applies to every session regardless of which project is open
 - `permission.skill["*"] = "allow"` means skills can be loaded without per-skill permission prompts
 - `permission.task = "ask"` is set if not already configured — this means spawning subagents/tasks prompts for confirmation rather than happening automatically
 - The skills appear in OpenCode's skill picker at `~/.config/opencode/skills/`
@@ -403,7 +403,7 @@ Not currently wired into CI — running it is a manual step (see `01-SETUP.md`, 
 
 - Skills must be **explicitly named** in the prompt — Hermes does not auto-select based on the request description
 - Configured via `skills.external_dirs` in `~/.hermes/config.yaml` — the directory itself is added, not symlinks to individual skills
-- `AGENT-STANDING-RULES.md` is not automatically loaded by Hermes (no equivalent of OpenCode's `instructions[]` mechanism has been confirmed working) — the SKILL.md injection layer (clarification + self-improvement protocol pointers) is the primary governance mechanism for Hermes
+- `AGENTS.md` is not automatically loaded by Hermes (no equivalent of OpenCode's `instructions[]` mechanism has been confirmed working) — the SKILL.md injection layer (clarification + self-improvement protocol pointers) is the primary governance mechanism for Hermes
 - The old `## Self-improvement` footer in `fix-bug/SKILL.md` was written for Hermes's built-in `skill_manage` tool — this is now superseded by the injected pointer
 
 ### Claude Code
@@ -425,8 +425,8 @@ Not currently wired into CI — running it is a manual step (see `01-SETUP.md`, 
 
 ## Governance rules quick reference
 
-### Rule 0 — Create AGENTS.md
-Check for `AGENTS.md` at the project root. If missing, create it by copying `AGENT-STANDING-RULES.md` verbatim. Never skip; never summarize.
+### Rule 0 — Ensure AGENTS.md exists, and that it's actually ours
+Run `bash <dev-agent-skills>/scripts/agents-md-sync.sh status` and follow the five-state result (`NO_AGENTS` → `write`; `AGENTS_FOREIGN` → `append` or leave as-is; `AGENTS_TAMPERED` → `accept`; etc.). Never hand-copy the rules, and never treat a pre-existing `AGENTS.md` as equivalent to ours.
 
 ### Rule 0b — Offer to gitignore local tooling artifacts
 Check whether this project's `.gitignore` already lists `graphify-out/`. If not, ask once, explicitly — never add it silently. If the answer is no, don't ask again for the rest of the session. Runs immediately after Rule 0, before Rule 1.
