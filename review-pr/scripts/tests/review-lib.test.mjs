@@ -44,6 +44,11 @@ import {
   dropAlreadyRaised,
   detectInjectionAttempts,
   planDiffChunks,
+  shouldRunArchitectCheck,
+  validateCoverageFinding,
+  dedupeCoverageFindings,
+  DEFAULT_ARCHITECT_FILE_THRESHOLD,
+  DEFAULT_ARCHITECT_SUBSYSTEM_THRESHOLD,
 } from "../review-lib.mjs";
 
 // ---------------------------------------------------------------------------
@@ -1357,5 +1362,242 @@ describe("content-based matching — the known limitation", () => {
       priorComments, currentAnchorIndex: idx, reviewerLogin: "gautham248", // no resolvePriorAnchor supplied
     });
     assert.equal(stillOpen.length, 1, "position fallback still finds SOMETHING at that line, does not throw");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Architect-pass (Step 2b) — broad-scope coverage findings
+// ---------------------------------------------------------------------------
+
+function makeCoverageFinding(over = {}) {
+  return {
+    type: "coverage",
+    subsystem: "state-sync",
+    rationale: "GameRoom state mutations have no corresponding broadcast path in this diff.",
+    confidence: 0.8,
+    ...over,
+  };
+}
+
+describe("shouldRunArchitectCheck — trigger thresholds", () => {
+  test("does not trigger under both thresholds", () => {
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: 3, matchedSubsystemCount: 1 }),
+      false
+    );
+  });
+
+  test("triggers at exactly the file-count threshold (10)", () => {
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: DEFAULT_ARCHITECT_FILE_THRESHOLD, matchedSubsystemCount: 0 }),
+      true
+    );
+  });
+
+  test("does not trigger one below the file-count threshold", () => {
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: DEFAULT_ARCHITECT_FILE_THRESHOLD - 1, matchedSubsystemCount: 0 }),
+      false
+    );
+  });
+
+  test("triggers at exactly the subsystem-span threshold (3), even with few files", () => {
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: 2, matchedSubsystemCount: DEFAULT_ARCHITECT_SUBSYSTEM_THRESHOLD }),
+      true
+    );
+  });
+
+  test("does not trigger one below the subsystem-span threshold", () => {
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: 2, matchedSubsystemCount: DEFAULT_ARCHITECT_SUBSYSTEM_THRESHOLD - 1 }),
+      false
+    );
+  });
+
+  test("either threshold alone is sufficient (OR, not AND)", () => {
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: 50, matchedSubsystemCount: 0 }),
+      true,
+      "large file count alone should trigger even with zero matched subsystems"
+    );
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: 0, matchedSubsystemCount: 5 }),
+      true,
+      "large subsystem span alone should trigger even with zero changed files"
+    );
+  });
+
+  test("custom thresholds override the defaults", () => {
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: 5, matchedSubsystemCount: 0, fileThreshold: 5 }),
+      true
+    );
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: 5, matchedSubsystemCount: 0, fileThreshold: 6 }),
+      false
+    );
+  });
+
+  test("non-numeric inputs are treated as 0, never throw", () => {
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: undefined, matchedSubsystemCount: NaN }),
+      false
+    );
+  });
+});
+
+describe("validateCoverageFinding — schema for non-line findings", () => {
+  test("accepts a well-formed coverage finding", () => {
+    const { ok, errors } = validateCoverageFinding(makeCoverageFinding());
+    assert.equal(ok, true, JSON.stringify(errors));
+  });
+
+  test("rejects wrong type", () => {
+    const { ok, errors } = validateCoverageFinding(makeCoverageFinding({ type: "blocker" }));
+    assert.equal(ok, false);
+    assert.ok(errors.some((e) => e.includes("type")));
+  });
+
+  test("rejects missing subsystem", () => {
+    const { ok, errors } = validateCoverageFinding(makeCoverageFinding({ subsystem: "" }));
+    assert.equal(ok, false);
+    assert.ok(errors.some((e) => e.includes("subsystem")));
+  });
+
+  test("rejects a rationale that's too short to explain anything", () => {
+    const { ok, errors } = validateCoverageFinding(makeCoverageFinding({ rationale: "missing" }));
+    assert.equal(ok, false);
+    assert.ok(errors.some((e) => e.includes("rationale")));
+  });
+
+  test("rejects out-of-range confidence", () => {
+    assert.equal(validateCoverageFinding(makeCoverageFinding({ confidence: 1.5 })).ok, false);
+    assert.equal(validateCoverageFinding(makeCoverageFinding({ confidence: -0.1 })).ok, false);
+  });
+
+  test("does NOT require file/line/evidence — the whole point of this schema", () => {
+    const f = makeCoverageFinding();
+    assert.equal(f.file, undefined);
+    assert.equal(f.line, undefined);
+    assert.equal(f.evidence, undefined);
+    assert.equal(validateCoverageFinding(f).ok, true);
+  });
+
+  test("handles null/undefined input without throwing", () => {
+    assert.equal(validateCoverageFinding(null).ok, false);
+    assert.equal(validateCoverageFinding(undefined).ok, false);
+  });
+});
+
+describe("dedupeCoverageFindings — one entry per subsystem", () => {
+  test("collapses two findings for the same subsystem into one", () => {
+    const result = dedupeCoverageFindings([
+      makeCoverageFinding({ subsystem: "state-sync", confidence: 0.6 }),
+      makeCoverageFinding({ subsystem: "state-sync", confidence: 0.9, rationale: "A stronger, more specific rationale here." }),
+    ]);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].confidence, 0.9);
+  });
+
+  test("keeps distinct subsystems separate", () => {
+    const result = dedupeCoverageFindings([
+      makeCoverageFinding({ subsystem: "state-sync" }),
+      makeCoverageFinding({ subsystem: "matchmaking" }),
+    ]);
+    assert.equal(result.length, 2);
+  });
+
+  test("subsystem matching is case-insensitive and whitespace-trimmed", () => {
+    const result = dedupeCoverageFindings([
+      makeCoverageFinding({ subsystem: "State-Sync", confidence: 0.5 }),
+      makeCoverageFinding({ subsystem: "  state-sync  ", confidence: 0.7 }),
+    ]);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].confidence, 0.7);
+  });
+
+  test("empty input returns empty output", () => {
+    assert.deepEqual(dedupeCoverageFindings([]), []);
+  });
+});
+
+describe("renderSummary — architecture review section", () => {
+  function baseArgs(over = {}) {
+    return {
+      findings: [],
+      lensReport: { selected: [], skipped: [], notApplicable: [] },
+      prMeta: { repo: "org/game", number: 42, changedFiles: 14 },
+      eventDecision: {},
+      ...over,
+    };
+  }
+
+  test("omits the section entirely when architectureReview is not passed", () => {
+    const summary = renderSummary(baseArgs());
+    assert.ok(!summary.includes("### Architecture review"));
+  });
+
+  test("renders narrative, touched subsystems, and coverage findings", () => {
+    const summary = renderSummary(
+      baseArgs({
+        architectureReview: {
+          narrative: "This PR adds game-room logic but does not touch state-sync.",
+          subsystemsTouched: ["game-logic", "matchmaking"],
+          coverageFindings: [makeCoverageFinding()],
+          heldCoverageCount: 0,
+        },
+      })
+    );
+    assert.ok(summary.includes("### Architecture review"));
+    assert.ok(summary.includes("This PR adds game-room logic"));
+    assert.ok(summary.includes("**Subsystems touched:** game-logic, matchmaking"));
+    assert.ok(summary.includes("**state-sync**"));
+    assert.ok(summary.includes("80% confidence"));
+  });
+
+  test("says explicitly when no coverage gaps were flagged, rather than an empty section", () => {
+    const summary = renderSummary(
+      baseArgs({
+        architectureReview: {
+          narrative: "Touches only the subsystems this kind of change would need.",
+          subsystemsTouched: ["state-sync"],
+          coverageFindings: [],
+          heldCoverageCount: 0,
+        },
+      })
+    );
+    assert.ok(summary.includes("No coverage gaps flagged"));
+  });
+
+  test("notes held-back low-confidence coverage findings without showing them", () => {
+    const summary = renderSummary(
+      baseArgs({
+        architectureReview: {
+          narrative: "n/a",
+          subsystemsTouched: [],
+          coverageFindings: [],
+          heldCoverageCount: 2,
+        },
+      })
+    );
+    assert.ok(summary.includes("2 low-confidence coverage observation(s) held back"));
+  });
+
+  test("architecture review section appears before the per-lens breakdown", () => {
+    const summary = renderSummary(
+      baseArgs({
+        lensReport: { selected: [{ skill: "coding-standards-backend", concern: "API conventions" }], skipped: [], notApplicable: [] },
+        architectureReview: {
+          narrative: "n/a",
+          subsystemsTouched: [],
+          coverageFindings: [],
+          heldCoverageCount: 0,
+        },
+      })
+    );
+    const archIdx = summary.indexOf("### Architecture review");
+    const lensIdx = summary.indexOf("### Lenses applied");
+    assert.ok(archIdx !== -1 && lensIdx !== -1 && archIdx < lensIdx);
   });
 });
