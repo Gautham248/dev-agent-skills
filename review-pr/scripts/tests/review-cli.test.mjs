@@ -175,6 +175,105 @@ describe("review-cli.mjs validate --architecture-review — real subprocess", ()
   });
 });
 
+describe("review-cli.mjs post --pre-existing-compile-errors / --sibling-context — real subprocess", () => {
+  test("both flags together render in the dry-run body and console summary", () => {
+    const dir = makeTmpDir();
+    const diffPath = path.join(dir, "pr.diff");
+    const findingsPath = path.join(dir, "findings.json");
+    const preExistingPath = path.join(dir, "pre-existing.json");
+    const siblingPath = path.join(dir, "sibling.json");
+
+    fs.writeFileSync(diffPath, SAMPLE_DIFF);
+    fs.writeFileSync(findingsPath, JSON.stringify([]));
+    fs.writeFileSync(
+      preExistingPath,
+      JSON.stringify([{ file: "src/Other.ts", line: 12, message: "Property 'foo' does not exist on type 'Bar'." }])
+    );
+    fs.writeFileSync(
+      siblingPath,
+      JSON.stringify({ generalCommentCount: 2, siblingPr: { owner: "10xMinds", repo: "fluffy-memory", number: 17 } })
+    );
+
+    const { stdout, status } = runCli([
+      "post",
+      "--repo", "org/game",
+      "--pr", "42",
+      "--diff", diffPath,
+      "--findings", findingsPath,
+      "--pre-existing-compile-errors", preExistingPath,
+      "--sibling-context", siblingPath,
+      "--head-sha", "deadbeef",
+      "--dry-run",
+    ]);
+
+    assert.equal(status, 0);
+    assert.match(stdout, /pre-existing compile errors: 1 \(not blocking, listed in summary\)/);
+    assert.match(stdout, /context considered: 2 general comment\(s\), sibling PR #17/);
+
+    const jsonStart = stdout.indexOf("{");
+    const payload = JSON.parse(stdout.slice(jsonStart));
+    assert.ok(payload.body.includes("Pre-existing compile errors"));
+    assert.ok(payload.body.includes("src/Other.ts:12"));
+    assert.ok(payload.body.includes("Context considered"));
+    assert.ok(payload.body.includes("10xMinds/fluffy-memory#17"));
+    // Never inline comments -- there's no diff line to anchor either of these to.
+    assert.equal(payload.comments.length, 0);
+  });
+
+  test("neither flag given: no context/pre-existing sections, unaffected otherwise", () => {
+    const dir = makeTmpDir();
+    const diffPath = path.join(dir, "pr.diff");
+    const findingsPath = path.join(dir, "findings.json");
+    fs.writeFileSync(diffPath, SAMPLE_DIFF);
+    fs.writeFileSync(findingsPath, JSON.stringify([]));
+
+    const { stdout, status } = runCli([
+      "post", "--repo", "org/game", "--pr", "42",
+      "--diff", diffPath, "--findings", findingsPath,
+      "--head-sha", "deadbeef", "--dry-run",
+    ]);
+    assert.equal(status, 0);
+    assert.ok(!stdout.includes("pre-existing compile errors"));
+    assert.ok(!stdout.includes("context considered"));
+  });
+
+  test("a missing --pre-existing-compile-errors file fails loudly, not silently", () => {
+    const dir = makeTmpDir();
+    const diffPath = path.join(dir, "pr.diff");
+    const findingsPath = path.join(dir, "findings.json");
+    fs.writeFileSync(diffPath, SAMPLE_DIFF);
+    fs.writeFileSync(findingsPath, JSON.stringify([]));
+
+    const { status, stderr } = runCli([
+      "post", "--repo", "org/game", "--pr", "42",
+      "--diff", diffPath, "--findings", findingsPath,
+      "--pre-existing-compile-errors", path.join(dir, "does-not-exist.json"),
+      "--head-sha", "deadbeef", "--dry-run",
+    ]);
+    assert.notEqual(status, 0);
+    assert.match(stderr, /--pre-existing-compile-errors file not found/);
+  });
+
+  test("malformed JSON in --sibling-context fails loudly, not silently", () => {
+    const dir = makeTmpDir();
+    const diffPath = path.join(dir, "pr.diff");
+    const findingsPath = path.join(dir, "findings.json");
+    const siblingPath = path.join(dir, "sibling.json");
+    fs.writeFileSync(diffPath, SAMPLE_DIFF);
+    fs.writeFileSync(findingsPath, JSON.stringify([]));
+    fs.writeFileSync(siblingPath, "{not valid json");
+
+    const { status, stderr } = runCli([
+      "post", "--repo", "org/game", "--pr", "42",
+      "--diff", diffPath, "--findings", findingsPath,
+      "--sibling-context", siblingPath,
+      "--head-sha", "deadbeef", "--dry-run",
+    ]);
+    assert.notEqual(status, 0);
+    assert.match(stderr, /--sibling-context file is not valid JSON/);
+  });
+});
+
 describe("review-cli.mjs post --dry-run --architecture-review — real subprocess", () => {
   test("the dry-run payload body includes the Architecture review section", () => {
     const dir = makeTmpDir();

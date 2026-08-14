@@ -65,7 +65,7 @@ was assigned".
 ```bash
 gh auth status
 gh pr view <number> --repo <owner>/<repo> \
-  --json number,title,body,author,baseRefName,headRefName,headRefOid,isDraft,changedFiles,additions,deletions,url,reviewRequests
+  --json number,title,body,author,baseRefName,headRefName,headRefOid,isDraft,changedFiles,additions,deletions,url,reviewRequests,comments
 ```
 
 If `gh` is unauthenticated, stop and say `gh auth login` first.
@@ -78,6 +78,27 @@ often unwanted noise.
 **Session-reusable:** the PR metadata and the resolved lens set can be reused
 if you review the same PR again in this conversation and the head SHA has not
 moved. If the SHA moved, re-fetch everything.
+
+### General (non-inline) comments and a linked sibling PR
+
+`comments` above is the PR's general conversation, not inline review
+comments (those come in Step 6) -- this is where a directive like "match
+how PR #17 did this" lives, and nothing else in this skill reads it.
+Full reasoning: `references/sibling-context.md`.
+
+```bash
+node --input-type=module -e "
+import { extractSiblingPrRefs } from 'review-lib.mjs';
+const refs = extractSiblingPrRefs(<comment bodies array>, { owner: '<owner>', repo: '<repo>', excludeNumber: <number> });
+console.log(JSON.stringify(refs));
+"
+```
+
+If it finds a same-org PR link, pull that PR's own review comments the same
+way as this PR's (`gh api repos/<owner>/<repo>/pulls/<sibling-number>/comments --paginate`),
+read through once, and carry it as shared framing into Step 4's lens passes
+-- never as a new finding needing validation against *this* diff. Record
+`{ generalCommentCount, siblingPr }` for Step 9's `--sibling-context` flag.
 
 ## Step 1 -- Pull it down locally
 
@@ -93,6 +114,54 @@ If checkout fails (conflicting local state, shallow clone), fall back to
 `gh pr diff <number> --repo <owner>/<repo>` and note in the summary that
 the review was diff-only -- a diff-only review cannot trace callers, and
 saying so is more useful than quietly producing a weaker review.
+
+## Step 1b -- Run the project's own type checker
+
+A lens reads the diff; it does not compile it. A real type error is ground
+truth no lens-based reasoning replaces, and it's cheap to get here -- Step 1
+already produced a real checkout with real code on disk.
+
+Full reasoning for each command below: `references/type-check.md`.
+
+```bash
+node --input-type=module -e "
+import fs from 'node:fs';
+import { detectTypecheckCommand } from 'review-lib.mjs';
+const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const hasTsconfig = fs.existsSync('tsconfig.json');
+console.log(JSON.stringify(detectTypecheckCommand({ scripts: pkg.scripts, hasTsconfig })));
+"
+```
+
+If `null`, skip this step entirely and say so plainly. Otherwise:
+
+```bash
+[ -d node_modules ] || timeout 120 npm install   # skip step + say why on failure
+
+# run the detected command, capture output, then:
+node --input-type=module -e "
+import { parseTscDiagnostics, parseSvelteCheckDiagnostics } from 'review-lib.mjs';
+// tsc:          parseTscDiagnostics(rawOutput)
+// svelte-check: parseSvelteCheckDiagnostics(rawOutput, process.cwd() + '/')
+"
+
+# split by whether the diagnostic's line is one the diff actually added:
+node --input-type=module -e "
+import { parseUnifiedDiff, buildAnchorIndex, classifyDiagnosticsAgainstDiff, compilerDiagnosticToFinding } from 'review-lib.mjs';
+const files = parseUnifiedDiff(<diff text>);
+const anchorIndex = buildAnchorIndex(files);
+const { introduced, preExisting } = classifyDiagnosticsAgainstDiff(<diagnostics>, anchorIndex);
+// introduced  -> compilerDiagnosticToFinding(d, anchorIndex.get(d.file, d.line, 'RIGHT').content)
+//                add to the same findings array Step 4 populates
+// preExisting -> do NOT turn into findings; save for Step 9's
+//                --pre-existing-compile-errors (full list, every time)
+"
+```
+
+`introduced` diagnostics are always `severity: "blocker"`, `confidence: 1`,
+`lens: "compiler"` -- ground truth, not an inference to weigh -- and pass
+Step 5's normal `validateFinding` unchanged. `preExisting` diagnostics
+never become findings (no diff line to anchor to) and never block the PR.
 
 ## Step 2 -- Ground the review in the graph
 
@@ -400,6 +469,16 @@ here too. The narrative and postable coverage findings render as their own
 "Architecture review" section in the review's summary body -- never as
 inline comments, since a coverage finding has no diff line to anchor to.
 
+**If Step 1b found any pre-existing compile errors**, add
+`--pre-existing-compile-errors /tmp/pre-existing-errors-<number>.json`
+(a JSON array of `{file, line, message}`). These render as their own
+summary section, full list, informational only.
+
+**If Step 0 found general comments or a sibling PR**, add
+`--sibling-context /tmp/sibling-context-<number>.json`
+(`{ generalCommentCount, siblingPr: {owner, repo, number} | null }`). This
+renders as a one-line transparency note, not a finding.
+
 Drop `--dry-run` to create it. **This creates a PENDING review, which is the
 default.** The comments land on the PR inline in the real diff, but GitHub
 shows them to nobody except you until you submit -- so you read the review the
@@ -482,6 +561,10 @@ and add it there.
 - `references/lens-registry.json` -- the lens list. **Edit this to add a
   standard to the review.**
 - `references/finding-schema.md` -- the required shape of a finding.
+- `references/type-check.md` -- Step 1b's full reasoning: command
+  detection, parser format details, introduced-vs-pre-existing split.
+- `references/sibling-context.md` -- Step 0's full reasoning: general
+  comments, same-org sibling-PR scoping, how it's carried into Step 4.
 - `references/github-mechanics.md` -- line/side anchoring, 422 causes,
   idempotency, rate limits.
 - `references/learning-loop.md` -- where a learned rule goes, and how it is

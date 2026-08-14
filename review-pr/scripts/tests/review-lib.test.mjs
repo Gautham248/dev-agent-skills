@@ -15,6 +15,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 import {
   expandManifestLenses,
@@ -49,6 +52,12 @@ import {
   dedupeCoverageFindings,
   DEFAULT_ARCHITECT_FILE_THRESHOLD,
   DEFAULT_ARCHITECT_SUBSYSTEM_THRESHOLD,
+  detectTypecheckCommand,
+  parseTscDiagnostics,
+  parseSvelteCheckDiagnostics,
+  classifyDiagnosticsAgainstDiff,
+  compilerDiagnosticToFinding,
+  extractSiblingPrRefs,
 } from "../review-lib.mjs";
 
 // ---------------------------------------------------------------------------
@@ -1366,8 +1375,325 @@ describe("content-based matching — the known limitation", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Architect-pass (Step 2b) — broad-scope coverage findings
+// Step 1b — compiler/type-checker diagnostics
 // ---------------------------------------------------------------------------
+//
+// The tsc/svelte-check fixtures in ./fixtures/ are REAL captured output —
+// generated once by actually running `tsc --noEmit` and `npx svelte-check`
+// against small throwaway broken projects (including the exact
+// `.on('message-received', ...)` error from the PR that motivated this
+// step), not hand-typed guesses at the format. They're committed rather
+// than regenerated per test run (unlike the git-diff fixtures above)
+// because installing svelte-check on every test run would make this suite
+// network-dependent and slow, which the rest of this repo's tests
+// deliberately avoid — but "real once, frozen after" is still real data,
+// not an assumption about what the tools print.
+
+describe("detectTypecheckCommand — command selection priority", () => {
+  test("prefers an explicit `check` script (SvelteKit convention)", () => {
+    const result = detectTypecheckCommand({ scripts: { check: "svelte-check --tsconfig ./tsconfig.json" }, hasTsconfig: true });
+    assert.deepEqual(result.command, ["npm", "run", "check"]);
+  });
+
+  test("falls back to `typecheck` script if `check` is absent", () => {
+    const result = detectTypecheckCommand({ scripts: { typecheck: "tsc --noEmit" }, hasTsconfig: true });
+    assert.deepEqual(result.command, ["npm", "run", "typecheck"]);
+  });
+
+  test("falls back to `type-check` (hyphenated) script last among script names", () => {
+    const result = detectTypecheckCommand({ scripts: { "type-check": "tsc --noEmit" }, hasTsconfig: true });
+    assert.deepEqual(result.command, ["npm", "run", "type-check"]);
+  });
+
+  test("falls back to bare tsc when no script matches but tsconfig.json exists", () => {
+    const result = detectTypecheckCommand({ scripts: { build: "vite build" }, hasTsconfig: true });
+    assert.deepEqual(result.command, ["npx", "tsc", "--noEmit"]);
+  });
+
+  test("returns null (not a guessed command) when neither a script nor tsconfig exists", () => {
+    assert.equal(detectTypecheckCommand({ scripts: {}, hasTsconfig: false }), null);
+  });
+
+  test("ignores an empty-string script value rather than treating it as present", () => {
+    const result = detectTypecheckCommand({ scripts: { check: "   " }, hasTsconfig: false });
+    assert.equal(result, null);
+  });
+});
+
+describe("parseTscDiagnostics — real tsc --noEmit output", () => {
+  const raw = fs.readFileSync(path.join(HERE, "fixtures", "tsc-real-output.txt"), "utf8");
+
+  test("parses both real diagnostics from the fixture", () => {
+    const diags = parseTscDiagnostics(raw);
+    assert.equal(diags.length, 2);
+  });
+
+  test("extracts file, line, column, code, and message correctly", () => {
+    const diags = parseTscDiagnostics(raw);
+    assert.deepEqual(diags[0], {
+      file: "bad.ts",
+      line: 3,
+      column: 4,
+      severity: "error",
+      code: "TS2345",
+      message: `Argument of type '"message-received"' is not assignable to parameter of type 'keyof Events'.`,
+      tool: "tsc",
+    });
+  });
+
+  test("ignores non-diagnostic lines without throwing", () => {
+    const diags = parseTscDiagnostics("Compiling...\n\n" + raw + "\nDone.");
+    assert.equal(diags.length, 2);
+  });
+
+  test("returns [] for empty or non-diagnostic input", () => {
+    assert.deepEqual(parseTscDiagnostics(""), []);
+    assert.deepEqual(parseTscDiagnostics("no errors found"), []);
+  });
+});
+
+describe("parseSvelteCheckDiagnostics — real svelte-check output", () => {
+  const raw = fs.readFileSync(path.join(HERE, "fixtures", "svelte-check-real-output.txt"), "utf8");
+
+  test("parses all 3 real diagnostics from a multi-file, multi-diagnostic run", () => {
+    const diags = parseSvelteCheckDiagnostics(raw, "/tmp/svelte-check-smoke/");
+    assert.equal(diags.length, 3);
+  });
+
+  test("strips the cwd prefix down to a repo-relative path", () => {
+    const diags = parseSvelteCheckDiagnostics(raw, "/tmp/svelte-check-smoke/");
+    assert.equal(diags[0].file, "src/Bad.svelte");
+    assert.ok(!diags[0].file.startsWith("/"));
+  });
+
+  test("extracts line, column, and message for each diagnostic in file order", () => {
+    const diags = parseSvelteCheckDiagnostics(raw, "/tmp/svelte-check-smoke/");
+    assert.equal(diags[0].line, 7);
+    assert.equal(diags[0].column, 8);
+    assert.match(diags[0].message, /message-received/);
+    assert.equal(diags[1].file, "src/Bad2.svelte");
+    assert.equal(diags[1].line, 2);
+    assert.equal(diags[2].file, "src/Bad2.svelte");
+    assert.equal(diags[2].line, 3);
+  });
+
+  test("does not double-count a source line that happens to look like a header", () => {
+    // Bad2.svelte's diagnostic block includes '<script lang="ts">' as
+    // trailing context, which is NOT itself a valid `path:line:col` header
+    // (no numeric line:col) -- confirms the parser doesn't misfire on it.
+    const diags = parseSvelteCheckDiagnostics(raw, "/tmp/svelte-check-smoke/");
+    assert.equal(diags.length, 3);
+  });
+
+  test("returns [] for output with zero errors", () => {
+    const clean = "Loading svelte-check in workspace: /x\nGetting Svelte diagnostics...\n\n====================================\nsvelte-check found 0 errors and 0 warnings in 3 files\n";
+    assert.deepEqual(parseSvelteCheckDiagnostics(clean, "/x"), []);
+  });
+});
+
+describe("classifyDiagnosticsAgainstDiff — introduced vs pre-existing", () => {
+  function diffWithAddedLine() {
+    return [
+      "diff --git a/src/Bad.svelte b/src/Bad.svelte",
+      "new file mode 100644",
+      "index 0000000..1111111",
+      "--- /dev/null",
+      "+++ b/src/Bad.svelte",
+      "@@ -0,0 +1,3 @@",
+      "+<script lang=\"ts\">",
+      "+  const x = 1;",
+      "+</script>",
+      "",
+    ].join("\n");
+  }
+
+  test("a diagnostic on a line the diff added is 'introduced'", () => {
+    const anchorIndex = buildAnchorIndex(parseUnifiedDiff(diffWithAddedLine()));
+    const { introduced, preExisting } = classifyDiagnosticsAgainstDiff(
+      [{ file: "src/Bad.svelte", line: 2, severity: "error", message: "x" }],
+      anchorIndex
+    );
+    assert.equal(introduced.length, 1);
+    assert.equal(preExisting.length, 0);
+  });
+
+  test("a diagnostic in a completely untouched file is 'pre-existing'", () => {
+    const anchorIndex = buildAnchorIndex(parseUnifiedDiff(diffWithAddedLine()));
+    const { introduced, preExisting } = classifyDiagnosticsAgainstDiff(
+      [{ file: "src/NeverTouched.ts", line: 99, severity: "error", message: "x" }],
+      anchorIndex
+    );
+    assert.equal(introduced.length, 0);
+    assert.equal(preExisting.length, 1);
+  });
+
+  test("a diagnostic on a CONTEXT line in a changed file is still 'pre-existing', not 'introduced'", () => {
+    const diff = [
+      "diff --git a/src/File.ts b/src/File.ts",
+      "index 1111111..2222222 100644",
+      "--- a/src/File.ts",
+      "+++ b/src/File.ts",
+      "@@ -1,3 +1,4 @@",
+      " const untouched = 1;",
+      "+const added = 2;",
+      " const alsoUntouched = 3;",
+      "",
+    ].join("\n");
+    const anchorIndex = buildAnchorIndex(parseUnifiedDiff(diff));
+    const { introduced, preExisting } = classifyDiagnosticsAgainstDiff(
+      [{ file: "src/File.ts", line: 1, severity: "error", message: "on a context line, not an added one" }],
+      anchorIndex
+    );
+    assert.equal(introduced.length, 0, "a context line the diff merely passed through is not this PR's fault");
+    assert.equal(preExisting.length, 1);
+  });
+
+  test("warnings are excluded entirely, from both buckets", () => {
+    const anchorIndex = buildAnchorIndex(parseUnifiedDiff(diffWithAddedLine()));
+    const { introduced, preExisting } = classifyDiagnosticsAgainstDiff(
+      [{ file: "src/Bad.svelte", line: 2, severity: "warning", message: "just a warning" }],
+      anchorIndex
+    );
+    assert.equal(introduced.length, 0);
+    assert.equal(preExisting.length, 0);
+  });
+});
+
+describe("compilerDiagnosticToFinding — shape and real validateFinding pass", () => {
+  test("produces a finding that passes validateFinding unchanged, no new validation path needed", () => {
+    const diff = [
+      "diff --git a/src/Bad.svelte b/src/Bad.svelte",
+      "new file mode 100644",
+      "index 0000000..1111111",
+      "--- /dev/null",
+      "+++ b/src/Bad.svelte",
+      "@@ -0,0 +1,1 @@",
+      "+e.on('message-received', () => {});",
+      "",
+    ].join("\n");
+    const anchorIndex = buildAnchorIndex(parseUnifiedDiff(diff));
+    const anchor = anchorIndex.get("src/Bad.svelte", 1, "RIGHT");
+    const finding = compilerDiagnosticToFinding(
+      { file: "src/Bad.svelte", line: 1, tool: "svelte-check", code: undefined, message: "not assignable" },
+      anchor.content
+    );
+    const result = validateFinding(finding, anchorIndex);
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+  });
+
+  test("always confidence 1 and severity blocker — a compiler error is not an inference", () => {
+    const finding = compilerDiagnosticToFinding(
+      { file: "x.ts", line: 1, tool: "tsc", code: "TS2345", message: "m" },
+      "some line"
+    );
+    assert.equal(finding.confidence, 1);
+    assert.equal(finding.severity, "blocker");
+    assert.equal(finding.lens, "compiler");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sibling-PR / general-comment context
+// ---------------------------------------------------------------------------
+
+describe("extractSiblingPrRefs — same-org PR links in comment text", () => {
+  test("finds a same-org, same-repo PR link", () => {
+    const refs = extractSiblingPrRefs(
+      ["Refer comments in Lawyerup: https://github.com/10xMinds/fluffy-memory/pull/17"],
+      { owner: "10xMinds", repo: "fluffy-memory", excludeNumber: 21 }
+    );
+    assert.equal(refs.length, 1);
+    assert.deepEqual(refs[0], { owner: "10xMinds", repo: "fluffy-memory", number: 17, url: "https://github.com/10xMinds/fluffy-memory/pull/17" });
+  });
+
+  test("excludes a self-reference to the PR currently being reviewed", () => {
+    const refs = extractSiblingPrRefs(
+      ["see https://github.com/10xMinds/fluffy-memory/pull/21 for context"],
+      { owner: "10xMinds", repo: "fluffy-memory", excludeNumber: 21 }
+    );
+    assert.equal(refs.length, 0);
+  });
+
+  test("excludes a PR link from a different owner/org — scoped to same-org only, on purpose", () => {
+    const refs = extractSiblingPrRefs(
+      ["unrelated: https://github.com/other-org/other-repo/pull/5"],
+      { owner: "10xMinds", repo: "fluffy-memory", excludeNumber: 21 }
+    );
+    assert.equal(refs.length, 0);
+  });
+
+  test("excludes a PR link from the same owner but a different repo", () => {
+    const refs = extractSiblingPrRefs(
+      ["see https://github.com/10xMinds/some-other-repo/pull/5"],
+      { owner: "10xMinds", repo: "fluffy-memory", excludeNumber: 21 }
+    );
+    assert.equal(refs.length, 0);
+  });
+
+  test("dedupes the same PR referenced from two different comments", () => {
+    const refs = extractSiblingPrRefs(
+      [
+        "https://github.com/10xMinds/fluffy-memory/pull/17",
+        "as mentioned before, https://github.com/10xMinds/fluffy-memory/pull/17 again",
+      ],
+      { owner: "10xMinds", repo: "fluffy-memory", excludeNumber: 21 }
+    );
+    assert.equal(refs.length, 1);
+  });
+
+  test("handles no comments, empty comments, and non-string entries without throwing", () => {
+    assert.deepEqual(extractSiblingPrRefs([], { owner: "a", repo: "b" }), []);
+    assert.deepEqual(extractSiblingPrRefs([null, undefined, 42, ""], { owner: "a", repo: "b" }), []);
+  });
+});
+
+describe("renderSummary — pre-existing compile errors and sibling context", () => {
+  function baseArgs(over = {}) {
+    return {
+      findings: [],
+      lensReport: { selected: [], skipped: [], notApplicable: [] },
+      prMeta: { repo: "org/game", number: 42, changedFiles: 14 },
+      eventDecision: {},
+      ...over,
+    };
+  }
+
+  test("renders the full list of pre-existing compile errors, not just a count", () => {
+    const summary = renderSummary(
+      baseArgs({
+        preExistingCompileErrors: [
+          { file: "src/Other.ts", line: 12, message: "Property 'foo' does not exist on type 'Bar'." },
+          { file: "src/Another.ts", line: 5, message: "Cannot find name 'baz'." },
+        ],
+      })
+    );
+    assert.ok(summary.includes("Pre-existing compile errors"));
+    assert.ok(summary.includes("src/Other.ts:12"));
+    assert.ok(summary.includes("Property 'foo' does not exist"));
+    assert.ok(summary.includes("src/Another.ts:5"));
+  });
+
+  test("omits the pre-existing section entirely when there are none", () => {
+    const summary = renderSummary(baseArgs({ preExistingCompileErrors: [] }));
+    assert.ok(!summary.includes("Pre-existing compile errors"));
+  });
+
+  test("renders sibling-PR context as a transparency note", () => {
+    const summary = renderSummary(
+      baseArgs({
+        siblingContext: { generalCommentCount: 2, siblingPr: { owner: "10xMinds", repo: "fluffy-memory", number: 17 } },
+      })
+    );
+    assert.ok(summary.includes("Context considered"));
+    assert.ok(summary.includes("2 general PR comment(s)"));
+    assert.ok(summary.includes("10xMinds/fluffy-memory#17"));
+  });
+
+  test("omits the context note when there is nothing to report", () => {
+    const summary = renderSummary(baseArgs({ siblingContext: { generalCommentCount: 0, siblingPr: null } }));
+    assert.ok(!summary.includes("Context considered"));
+  });
+});
 
 function makeCoverageFinding(over = {}) {
   return {
