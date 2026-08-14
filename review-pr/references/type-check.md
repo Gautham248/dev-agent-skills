@@ -11,11 +11,17 @@ already produced a real checkout with real code on disk.
 
 ## Command detection
 
-`detectTypecheckCommand` checks, in order: `package.json`'s `check` script
-(SvelteKit convention — usually wraps `svelte-check`), then `typecheck`,
-then `type-check`, then falls back to bare `tsc --noEmit` only if a
+`detectTypecheckCommand` checks, in order: `package.json`'s `typecheck`
+script, then `type-check`, then `check` (SvelteKit convention — usually
+wraps `svelte-check`), then falls back to bare `tsc --noEmit` only if a
 `tsconfig.json` exists and no script matched. Returns `null` if neither is
 available.
+
+The unambiguous names (`typecheck`, `type-check`) precede `check` on
+purpose: a plain `check` script often means lint or format, not a type
+check, so a repo with both `"check": "eslint ."` and `"typecheck": "tsc
+--noEmit"` would otherwise run the linter, parse zero diagnostics, and
+silently report a clean type-check that never ran a type checker.
 
 If it prints `null`, skip Step 1b entirely — there's nothing to run, and
 note that plainly rather than silently claiming a clean type-check.

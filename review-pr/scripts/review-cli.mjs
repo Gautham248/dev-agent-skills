@@ -102,16 +102,26 @@ function readArchitectureReview(p) {
  * Shared by --pre-existing-compile-errors and --sibling-context: both are
  * plain JSON, informational-only inputs with no validation/dedup pipeline
  * of their own (unlike findings or coverage findings) -- read-and-render,
- * nothing more.
+ * nothing more. `kind` asserts the top-level shape so a wrong-shape file
+ * fails loudly (like the missing-file and malformed-JSON cases) rather than
+ * rendering garbage (`undefined:undefined`) or being silently dropped.
  */
-function readJsonFlag(p, flagName) {
+function readJsonFlag(p, flagName, { kind } = {}) {
   if (!p) return null;
   if (!fs.existsSync(p)) die(`--${flagName} file not found: ${p}`);
+  let parsed;
   try {
-    return JSON.parse(fs.readFileSync(p, "utf8"));
+    parsed = JSON.parse(fs.readFileSync(p, "utf8"));
   } catch (e) {
     die(`--${flagName} file is not valid JSON: ${e.message}`);
   }
+  if (kind === "array" && !Array.isArray(parsed)) {
+    die(`--${flagName} must be a JSON array of { file, line, message }`);
+  }
+  if (kind === "object" && (parsed === null || Array.isArray(parsed) || typeof parsed !== "object")) {
+    die(`--${flagName} must be a JSON object of { generalCommentCount, siblingPr }`);
+  }
+  return parsed;
 }
 
 /**
@@ -327,8 +337,8 @@ function cmdPost(a) {
   const architectureReviewRaw = readArchitectureReview(a["architecture-review"]);
   const coverage = architectureReviewRaw ? runCoverageValidation(architectureReviewRaw) : null;
 
-  const preExistingCompileErrors = readJsonFlag(a["pre-existing-compile-errors"], "pre-existing-compile-errors") || [];
-  const siblingContext = readJsonFlag(a["sibling-context"], "sibling-context");
+  const preExistingCompileErrors = readJsonFlag(a["pre-existing-compile-errors"], "pre-existing-compile-errors", { kind: "array" }) || [];
+  const siblingContext = readJsonFlag(a["sibling-context"], "sibling-context", { kind: "object" });
 
   if (invalid.length) {
     die(

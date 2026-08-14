@@ -1390,19 +1390,24 @@ describe("content-based matching — the known limitation", () => {
 // not an assumption about what the tools print.
 
 describe("detectTypecheckCommand — command selection priority", () => {
-  test("prefers an explicit `check` script (SvelteKit convention)", () => {
-    const result = detectTypecheckCommand({ scripts: { check: "svelte-check --tsconfig ./tsconfig.json" }, hasTsconfig: true });
-    assert.deepEqual(result.command, ["npm", "run", "check"]);
-  });
-
-  test("falls back to `typecheck` script if `check` is absent", () => {
+  test("prefers an explicit `typecheck` script", () => {
     const result = detectTypecheckCommand({ scripts: { typecheck: "tsc --noEmit" }, hasTsconfig: true });
     assert.deepEqual(result.command, ["npm", "run", "typecheck"]);
   });
 
-  test("falls back to `type-check` (hyphenated) script last among script names", () => {
+  test("prefers `typecheck` over the ambiguous `check` when both are present", () => {
+    const result = detectTypecheckCommand({ scripts: { check: "eslint .", typecheck: "tsc --noEmit" }, hasTsconfig: true });
+    assert.deepEqual(result.command, ["npm", "run", "typecheck"]);
+  });
+
+  test("falls back to `type-check` (hyphenated) when `typecheck` is absent", () => {
     const result = detectTypecheckCommand({ scripts: { "type-check": "tsc --noEmit" }, hasTsconfig: true });
     assert.deepEqual(result.command, ["npm", "run", "type-check"]);
+  });
+
+  test("falls back to `check` (SvelteKit convention) when neither typecheck name is present", () => {
+    const result = detectTypecheckCommand({ scripts: { check: "svelte-check --tsconfig ./tsconfig.json" }, hasTsconfig: true });
+    assert.deepEqual(result.command, ["npm", "run", "check"]);
   });
 
   test("falls back to bare tsc when no script matches but tsconfig.json exists", () => {

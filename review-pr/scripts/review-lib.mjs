@@ -850,14 +850,18 @@ export function dedupeCoverageFindings(findings) {
 
 /**
  * Picks the command to run, in priority order: an explicit package.json
- * script (the project's own choice of tool takes precedence over any
- * default), falling back to bare `tsc --noEmit` only if a tsconfig.json
+ * script that names a type checker (`typecheck`, then `type-check`) takes
+ * precedence over the ambiguous `check` script, which many non-SvelteKit
+ * repos use for lint/format rather than a type check and would otherwise
+ * silently produce a false "clean type-check". Falls back to `check`
+ * (SvelteKit convention — usually wraps `svelte-check`) only when neither
+ * unambiguous name is present, then to bare `tsc --noEmit` if a tsconfig.json
  * exists and no script covers it. Returns null if neither is available —
  * callers must skip Step 1b cleanly in that case, not silently claim a
  * clean type-check.
  */
 export function detectTypecheckCommand({ scripts = {}, hasTsconfig = false } = {}) {
-  for (const key of ["check", "typecheck", "type-check"]) {
+  for (const key of ["typecheck", "type-check", "check"]) {
     if (typeof scripts[key] === "string" && scripts[key].trim()) {
       return { command: ["npm", "run", key], source: `package.json script "${key}"` };
     }

@@ -272,6 +272,44 @@ describe("review-cli.mjs post --pre-existing-compile-errors / --sibling-context 
     assert.notEqual(status, 0);
     assert.match(stderr, /--sibling-context file is not valid JSON/);
   });
+
+  test("a wrong-shape (non-array) --pre-existing-compile-errors file fails loudly, not silently", () => {
+    const dir = makeTmpDir();
+    const diffPath = path.join(dir, "pr.diff");
+    const findingsPath = path.join(dir, "findings.json");
+    const preExistingPath = path.join(dir, "pre-existing.json");
+    fs.writeFileSync(diffPath, SAMPLE_DIFF);
+    fs.writeFileSync(findingsPath, JSON.stringify([]));
+    fs.writeFileSync(preExistingPath, JSON.stringify({ file: "src/Other.ts", line: 12, message: "nope" }));
+
+    const { status, stderr } = runCli([
+      "post", "--repo", "org/game", "--pr", "42",
+      "--diff", diffPath, "--findings", findingsPath,
+      "--pre-existing-compile-errors", preExistingPath,
+      "--head-sha", "deadbeef", "--dry-run",
+    ]);
+    assert.notEqual(status, 0);
+    assert.match(stderr, /--pre-existing-compile-errors must be a JSON array/);
+  });
+
+  test("a wrong-shape (array) --sibling-context file fails loudly, not silently", () => {
+    const dir = makeTmpDir();
+    const diffPath = path.join(dir, "pr.diff");
+    const findingsPath = path.join(dir, "findings.json");
+    const siblingPath = path.join(dir, "sibling.json");
+    fs.writeFileSync(diffPath, SAMPLE_DIFF);
+    fs.writeFileSync(findingsPath, JSON.stringify([]));
+    fs.writeFileSync(siblingPath, JSON.stringify([{ generalCommentCount: 1 }]));
+
+    const { status, stderr } = runCli([
+      "post", "--repo", "org/game", "--pr", "42",
+      "--diff", diffPath, "--findings", findingsPath,
+      "--sibling-context", siblingPath,
+      "--head-sha", "deadbeef", "--dry-run",
+    ]);
+    assert.notEqual(status, 0);
+    assert.match(stderr, /--sibling-context must be a JSON object/);
+  });
 });
 
 describe("review-cli.mjs post --dry-run --architecture-review — real subprocess", () => {
