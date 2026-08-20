@@ -832,8 +832,195 @@ export function dedupeCoverageFindings(findings) {
 }
 
 // ---------------------------------------------------------------------------
-// Review event resolution (the self-review 422 guard)
+// Step 1b — compiler/type-checker diagnostics
 // ---------------------------------------------------------------------------
+//
+// Unlike every finding above, a compiler diagnostic is not an inference —
+// it's ground truth from the project's own tooling. It always gets
+// confidence 1.0 (never held back, never confidence-gated) and severity
+// "blocker" (a project that doesn't compile is broken, full stop). The one
+// piece of judgment left is WHERE it lands: on a line this diff actually
+// added (a normal, line-anchored finding, validated the same way as any
+// other) versus a line the diff never touched (a pre-existing error the
+// diff's own changes surfaced or just happens to coexist with — this
+// can't be validateFinding'd against the diff at all, since it isn't in
+// it, so it gets its own summary section instead, the same treatment
+// Step 2b's coverage findings got for the same underlying reason: no diff
+// line to anchor a real observation to).
+
+/**
+ * Picks the command to run, in priority order: an explicit package.json
+ * script that names a type checker (`typecheck`, then `type-check`) takes
+ * precedence over the ambiguous `check` script, which many non-SvelteKit
+ * repos use for lint/format rather than a type check and would otherwise
+ * silently produce a false "clean type-check". Falls back to `check`
+ * (SvelteKit convention — usually wraps `svelte-check`) only when neither
+ * unambiguous name is present, then to bare `tsc --noEmit` if a tsconfig.json
+ * exists and no script covers it. Returns null if neither is available —
+ * callers must skip Step 1b cleanly in that case, not silently claim a
+ * clean type-check.
+ */
+export function detectTypecheckCommand({ scripts = {}, hasTsconfig = false } = {}) {
+  for (const key of ["typecheck", "type-check", "check"]) {
+    if (typeof scripts[key] === "string" && scripts[key].trim()) {
+      return { command: ["npm", "run", key], source: `package.json script "${key}"` };
+    }
+  }
+  if (hasTsconfig) {
+    return { command: ["npx", "tsc", "--noEmit"], source: "tsconfig.json (no package.json script found)" };
+  }
+  return null;
+}
+
+/**
+ * Parses `tsc`'s default (non---pretty) diagnostic format:
+ *   path/to/file.ts(12,5): error TS2345: message text
+ * Verified against real `tsc --noEmit` output, not a guessed format.
+ */
+export function parseTscDiagnostics(rawOutput) {
+  const results = [];
+  const re = /^(.+?)\((\d+),(\d+)\): (error|warning) (TS\d+): (.+)$/;
+  for (const line of String(rawOutput || "").split("\n")) {
+    const m = line.match(re);
+    if (!m) continue;
+    results.push({
+      file: m[1],
+      line: Number(m[2]),
+      column: Number(m[3]),
+      severity: m[4],
+      code: m[5],
+      message: m[6].trim(),
+      tool: "tsc",
+    });
+  }
+  return results;
+}
+
+/**
+ * Parses `svelte-check`'s diagnostic format:
+ *   /abs/path/File.svelte:12:5
+ *   Error: message text (ts)
+ *   <one or more lines of surrounding source, until a blank line>
+ * Verified against real `svelte-check` output (including the multi-file,
+ * multi-diagnostic case), not a guessed format. `cwd` strips the absolute
+ * path prefix svelte-check always emits down to a repo-relative path, so
+ * it matches the diff's own path convention.
+ */
+export function parseSvelteCheckDiagnostics(rawOutput, cwd = "") {
+  const results = [];
+  const lines = String(rawOutput || "").split("\n");
+  const headerRe = /^(.+):(\d+):(\d+)$/;
+  const messageRe = /^(Error|Warning): (.+?)(?: \((\w+)\))?$/;
+
+  for (let i = 0; i < lines.length; i++) {
+    const header = lines[i].match(headerRe);
+    if (!header) continue;
+    const messageLine = lines[i + 1];
+    if (!messageLine) continue;
+    const msg = messageLine.match(messageRe);
+    if (!msg) continue;
+
+    let file = header[1];
+    if (cwd && file.startsWith(cwd)) {
+      file = file.slice(cwd.length).replace(/^\/+/, "");
+    }
+
+    results.push({
+      file,
+      line: Number(header[2]),
+      column: Number(header[3]),
+      severity: msg[1] === "Error" ? "error" : "warning",
+      message: msg[2].trim(),
+      tool: "svelte-check",
+    });
+    i++; // consume the message line so a coincidental header-shaped source line isn't double-parsed
+  }
+  return results;
+}
+
+/**
+ * Splits diagnostics into ones that land on a line this diff actually
+ * added (kind === "added" in the anchor index) versus everything else —
+ * a pre-existing error in an untouched file, or on a context line the
+ * diff merely passed through without changing. Only the anchorIndex's own
+ * "added" classification counts as "this PR introduced it"; a diagnostic
+ * on a context line in a changed file is still pre-existing relative to
+ * this PR, even though the file itself is part of the diff.
+ */
+export function classifyDiagnosticsAgainstDiff(diagnostics, anchorIndex) {
+  const introduced = [];
+  const preExisting = [];
+  for (const d of diagnostics) {
+    if (d.severity === "warning") continue; // Step 1b is about compile ERRORS; warnings are noise here.
+    const anchor = anchorIndex.get(d.file, d.line, "RIGHT");
+    if (anchor && anchor.kind === "added") introduced.push(d);
+    else preExisting.push(d);
+  }
+  return { introduced, preExisting };
+}
+
+/**
+ * Turns an "introduced by this diff" diagnostic into a normal finding —
+ * same shape validateFinding already checks, so no new validation path is
+ * needed for this half. `evidenceLine` is the actual RIGHT-side source
+ * line's content, read from the diff's own anchor (never re-read from
+ * disk — the diff is the source of truth for what evidence-in-diff means
+ * everywhere else in this file, and compiler findings shouldn't be an
+ * exception).
+ */
+export function compilerDiagnosticToFinding(diag, evidenceLine) {
+  return {
+    lens: "compiler",
+    severity: "blocker",
+    file: diag.file,
+    line: diag.line,
+    side: "RIGHT",
+    evidence: evidenceLine,
+    rationale: `${diag.tool} (${diag.code || "error"}): ${diag.message}`,
+    confidence: 1,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Sibling-PR context — general comments + a linked same-org PR's own review
+// ---------------------------------------------------------------------------
+//
+// Neither of these produces a validated finding. A general comment saying
+// "match Lawyerup's convention" or a sibling PR's own review comments are
+// framing, not a verifiable claim the way a diff line or a compiler
+// diagnostic is — they get carried into lens passes as context, the same
+// treatment Step 2b's narrative already gets, not pushed through
+// validateFinding.
+
+/**
+ * Scans a list of comment bodies for github.com PR URLs belonging to the
+ * same owner/repo family, excluding a self-reference to the PR currently
+ * being reviewed. Deliberately scoped to the same owner — an org's own
+ * convention-setting PR is the realistic case (as in PR #21 pointing at
+ * PR #17 in the same org), and following an arbitrary external repo's PR
+ * link has no such justification and a much larger blast radius.
+ */
+export function extractSiblingPrRefs(commentBodies, { owner, repo, excludeNumber } = {}) {
+  const re = /https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/g;
+  const seen = new Set();
+  const results = [];
+  for (const body of commentBodies || []) {
+    if (typeof body !== "string") continue;
+    let m;
+    while ((m = re.exec(body)) !== null) {
+      const [, refOwner, refRepo, refNumberStr] = m;
+      const refNumber = Number(refNumberStr);
+      if (owner && refOwner.toLowerCase() !== owner.toLowerCase()) continue;
+      if (repo && refRepo.toLowerCase() !== repo.toLowerCase()) continue;
+      if (excludeNumber && refNumber === Number(excludeNumber)) continue;
+      const key = `${refOwner}/${refRepo}#${refNumber}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push({ owner: refOwner, repo: refRepo, number: refNumber, url: m[0] });
+    }
+  }
+  return results;
+}
 
 /**
  * GitHub rejects APPROVE and REQUEST_CHANGES on your own PR with a 422.
@@ -962,6 +1149,8 @@ export function renderSummary({
   prMeta = {},
   eventDecision,
   architectureReview = null,
+  preExistingCompileErrors = [],
+  siblingContext = null,
 }) {
   const counts = { blocker: 0, should: 0, nit: 0 };
   for (const f of findings) counts[f.severity]++;
@@ -977,6 +1166,42 @@ export function renderSummary({
 
   if (eventDecision?.downgraded) {
     out.push(`> ${eventDecision.reason}`);
+    out.push("");
+  }
+
+  // Sibling-PR / general-comment context (transparency note, not a
+  // finding) — same spirit as architecture-context's "cache was absent,
+  // derived by reading the code directly" note: say what informed the
+  // review rather than let it silently shape findings unattributed.
+  if (siblingContext && (siblingContext.generalCommentCount || siblingContext.siblingPr)) {
+    const parts = [];
+    if (siblingContext.generalCommentCount) {
+      parts.push(`${siblingContext.generalCommentCount} general PR comment(s) considered as framing`);
+    }
+    if (siblingContext.siblingPr) {
+      parts.push(
+        `sibling PR referenced: ${siblingContext.siblingPr.owner}/${siblingContext.siblingPr.repo}#${siblingContext.siblingPr.number}`
+      );
+    }
+    out.push(`_Context considered: ${parts.join("; ")}._`);
+    out.push("");
+  }
+
+  // Pre-existing compile errors — real compiler diagnostics whose line the
+  // diff never touched, so they cannot be validated against the diff the
+  // way an in-diff compiler finding is (see compilerDiagnosticToFinding).
+  // Full list every time, not a count: these are ground truth, not an
+  // inference someone might want summarized away.
+  if (preExistingCompileErrors.length) {
+    out.push("### Pre-existing compile errors (not introduced by this PR)");
+    out.push("");
+    out.push(
+      "_These do not block this PR and are not staged as inline comments — the diff never touched these lines. Listed for visibility only._"
+    );
+    out.push("");
+    for (const d of preExistingCompileErrors) {
+      out.push(`- \`${d.file}:${d.line}\` — ${d.message}`);
+    }
     out.push("");
   }
 

@@ -1,0 +1,23 @@
+Loading svelte-check in workspace: /tmp/svelte-check-smoke
+Getting Svelte diagnostics...
+
+/tmp/svelte-check-smoke/src/Bad.svelte:7:8
+Error: Argument of type '"message-received"' is not assignable to parameter of type 'keyof Events'. (ts)
+  const e = new Emitter();
+  e.on('message-received', () => {});
+</script>
+
+/tmp/svelte-check-smoke/src/Bad2.svelte:2:7
+Error: Type 'string' is not assignable to type 'number'. (ts)
+<script lang="ts">
+  let x: number = "oops";
+  // @ts-expect-error unused
+
+/tmp/svelte-check-smoke/src/Bad2.svelte:3:3
+Error: Unused '@ts-expect-error' directive. (ts)
+  let x: number = "oops";
+  // @ts-expect-error unused
+  let unused;
+
+====================================
+svelte-check found 3 errors and 0 warnings in 2 files

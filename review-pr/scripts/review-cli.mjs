@@ -99,6 +99,32 @@ function readArchitectureReview(p) {
 }
 
 /**
+ * Shared by --pre-existing-compile-errors and --sibling-context: both are
+ * plain JSON, informational-only inputs with no validation/dedup pipeline
+ * of their own (unlike findings or coverage findings) -- read-and-render,
+ * nothing more. `kind` asserts the top-level shape so a wrong-shape file
+ * fails loudly (like the missing-file and malformed-JSON cases) rather than
+ * rendering garbage (`undefined:undefined`) or being silently dropped.
+ */
+function readJsonFlag(p, flagName, { kind } = {}) {
+  if (!p) return null;
+  if (!fs.existsSync(p)) die(`--${flagName} file not found: ${p}`);
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch (e) {
+    die(`--${flagName} file is not valid JSON: ${e.message}`);
+  }
+  if (kind === "array" && !Array.isArray(parsed)) {
+    die(`--${flagName} must be a JSON array of { file, line, message }`);
+  }
+  if (kind === "object" && (parsed === null || Array.isArray(parsed) || typeof parsed !== "object")) {
+    die(`--${flagName} must be a JSON object of { generalCommentCount, siblingPr }`);
+  }
+  return parsed;
+}
+
+/**
  * Validates and dedupes an architecture-review file's coverageFindings.
  * Unlike line findings (runValidation, above) an invalid coverage finding
  * does not risk a 422 on post — there is no anchor to reject — so this
@@ -311,6 +337,9 @@ function cmdPost(a) {
   const architectureReviewRaw = readArchitectureReview(a["architecture-review"]);
   const coverage = architectureReviewRaw ? runCoverageValidation(architectureReviewRaw) : null;
 
+  const preExistingCompileErrors = readJsonFlag(a["pre-existing-compile-errors"], "pre-existing-compile-errors", { kind: "array" }) || [];
+  const siblingContext = readJsonFlag(a["sibling-context"], "sibling-context", { kind: "object" });
+
   if (invalid.length) {
     die(
       `${invalid.length} finding(s) failed validation. Posting would 422 and lose the whole review. ` +
@@ -508,6 +537,8 @@ function cmdPost(a) {
       prMeta: { repo, number: pr, changedFiles: files.length },
       eventDecision,
       architectureReview,
+      preExistingCompileErrors,
+      siblingContext,
     }) + `\n\n${reviewMarker(currentSha)}\n`;
 
   const payload = { ...draft, body: summary };
@@ -530,6 +561,15 @@ function cmdPost(a) {
         `  architecture review: ${coverage.post.length} coverage finding(s) shown, ` +
           `${coverage.held.length} held back`
       );
+    }
+    if (preExistingCompileErrors.length) {
+      console.log(`  pre-existing compile errors: ${preExistingCompileErrors.length} (not blocking, listed in summary)`);
+    }
+    if (siblingContext) {
+      const bits = [];
+      if (siblingContext.generalCommentCount) bits.push(`${siblingContext.generalCommentCount} general comment(s)`);
+      if (siblingContext.siblingPr) bits.push(`sibling PR #${siblingContext.siblingPr.number}`);
+      if (bits.length) console.log(`  context considered: ${bits.join(", ")}`);
     }
     console.log("");
     console.log(JSON.stringify(payload, null, 2));
@@ -689,7 +729,9 @@ else {
   plan     --diff <f> [--skills-root <d>] [--domains a,b] [--registry <f>] [--json <f>]
   validate --diff <f> --findings <f> [--architecture-review <f>]
   post     --repo <o/r> --pr <n> --diff <f> --findings <f> --head-sha <sha>
-           [--plan <f>] [--architecture-review <f>] [--dry-run] [--publish]
+           [--plan <f>] [--architecture-review <f>]
+           [--pre-existing-compile-errors <f>] [--sibling-context <f>]
+           [--dry-run] [--publish]
 
            Creates a PENDING review by default: the comments appear inline in
            the real GitHub diff but are visible only to you until you submit.
@@ -703,6 +745,17 @@ else {
            validateCoverageFinding in review-lib.mjs) and rendered as their
            own "Architecture review" section in the posted summary, not as
            inline comments.
+
+           --pre-existing-compile-errors points at a JSON array of
+           { file, line, message } — real compiler diagnostics from Step 1b
+           whose line the diff never touched, so they can't be inline
+           comments. Rendered as their own summary section, full list,
+           informational only — never blocks the PR.
+
+           --sibling-context points at a JSON file
+           { generalCommentCount, siblingPr: {owner, repo, number} | null }
+           from Step 0 — rendered as a one-line transparency note, not a
+           finding.
 
   submit   --repo <o/r> --pr <n> --review-id <id> [--event COMMENT|APPROVE|REQUEST_CHANGES] [--body <text>]
   discard  --repo <o/r> --pr <n> --review-id <id>
