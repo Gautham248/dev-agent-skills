@@ -106,7 +106,7 @@ function readArchitectureReview(p) {
  * fails loudly (like the missing-file and malformed-JSON cases) rather than
  * rendering garbage (`undefined:undefined`) or being silently dropped.
  */
-function readJsonFlag(p, flagName, { kind } = {}) {
+function readJsonFlag(p, flagName, { kind, shapeHint } = {}) {
   if (!p) return null;
   if (!fs.existsSync(p)) die(`--${flagName} file not found: ${p}`);
   let parsed;
@@ -116,10 +116,10 @@ function readJsonFlag(p, flagName, { kind } = {}) {
     die(`--${flagName} file is not valid JSON: ${e.message}`);
   }
   if (kind === "array" && !Array.isArray(parsed)) {
-    die(`--${flagName} must be a JSON array of { file, line, message }`);
+    die(`--${flagName} must be a JSON array${shapeHint ? ` of ${shapeHint}` : ""}`);
   }
   if (kind === "object" && (parsed === null || Array.isArray(parsed) || typeof parsed !== "object")) {
-    die(`--${flagName} must be a JSON object of { generalCommentCount, siblingPr }`);
+    die(`--${flagName} must be a JSON object${shapeHint ? ` of ${shapeHint}` : ""}`);
   }
   return parsed;
 }
@@ -337,8 +337,9 @@ function cmdPost(a) {
   const architectureReviewRaw = readArchitectureReview(a["architecture-review"]);
   const coverage = architectureReviewRaw ? runCoverageValidation(architectureReviewRaw) : null;
 
-  const preExistingCompileErrors = readJsonFlag(a["pre-existing-compile-errors"], "pre-existing-compile-errors", { kind: "array" }) || [];
-  const siblingContext = readJsonFlag(a["sibling-context"], "sibling-context", { kind: "object" });
+  const preExistingCompileErrors = readJsonFlag(a["pre-existing-compile-errors"], "pre-existing-compile-errors", { kind: "array", shapeHint: "{ file, line, message }" }) || [];
+  const siblingContext = readJsonFlag(a["sibling-context"], "sibling-context", { kind: "object", shapeHint: "{ generalCommentCount, siblingPr }" });
+  const completenessChecks = readJsonFlag(a["completeness-checks"], "completeness-checks", { kind: "object", shapeHint: "{ stateMutation, identity, resourceCleanup }" });
 
   if (invalid.length) {
     die(
@@ -539,6 +540,7 @@ function cmdPost(a) {
       architectureReview,
       preExistingCompileErrors,
       siblingContext,
+      completenessChecks,
     }) + `\n\n${reviewMarker(currentSha)}\n`;
 
   const payload = { ...draft, body: summary };
@@ -570,6 +572,12 @@ function cmdPost(a) {
       if (siblingContext.generalCommentCount) bits.push(`${siblingContext.generalCommentCount} general comment(s)`);
       if (siblingContext.siblingPr) bits.push(`sibling PR #${siblingContext.siblingPr.number}`);
       if (bits.length) console.log(`  context considered: ${bits.join(", ")}`);
+    }
+    if (completenessChecks) {
+      const { stateMutation = 0, identity = 0, resourceCleanup = 0 } = completenessChecks;
+      console.log(
+        `  completeness gate: ${stateMutation} state-mutation, ${identity} identity, ${resourceCleanup} resource-cleanup candidate(s) traced`
+      );
     }
     console.log("");
     console.log(JSON.stringify(payload, null, 2));
@@ -731,6 +739,7 @@ else {
   post     --repo <o/r> --pr <n> --diff <f> --findings <f> --head-sha <sha>
            [--plan <f>] [--architecture-review <f>]
            [--pre-existing-compile-errors <f>] [--sibling-context <f>]
+           [--completeness-checks <f>]
            [--dry-run] [--publish]
 
            Creates a PENDING review by default: the comments appear inline in
@@ -756,6 +765,13 @@ else {
            { generalCommentCount, siblingPr: {owner, repo, number} | null }
            from Step 0 — rendered as a one-line transparency note, not a
            finding.
+
+           --completeness-checks points at a JSON object
+           { stateMutation, identity, resourceCleanup } — candidate counts
+           from Step 4c's mandatory gate. Rendered as a one-line count so a
+           clean gate run is provable, not silently indistinguishable from
+           a gate that didn't run. Any actual gap Step 4c found is already
+           a normal finding in --findings, not duplicated here.
 
   submit   --repo <o/r> --pr <n> --review-id <id> [--event COMMENT|APPROVE|REQUEST_CHANGES] [--body <text>]
   discard  --repo <o/r> --pr <n> --review-id <id>
