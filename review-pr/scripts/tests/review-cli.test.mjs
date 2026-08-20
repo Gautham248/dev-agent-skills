@@ -468,3 +468,89 @@ describe("review-cli.mjs post --dry-run --architecture-review — real subproces
     assert.equal(payload.comments.length, 0);
   });
 });
+
+describe("review-cli.mjs plan — real lens-registry.json, real skills-root", () => {
+  // Loads the ACTUAL shipped registry and skill directories (SKILLS_ROOT
+  // below, resolved from this test file's own location) rather than a
+  // synthetic fixture -- this is the test that would catch a typo in
+  // lens-registry.json or a missing SKILL.md path, which a fixture-based
+  // test cannot, since the fixture would just encode the same mistake.
+  const SKILLS_ROOT = path.join(HERE, "..", "..", "..");
+
+  function planForDiff(diffText) {
+    const dir = makeTmpDir();
+    const diffPath = path.join(dir, "pr.diff");
+    fs.writeFileSync(diffPath, diffText);
+    return runCli([
+      "plan",
+      "--diff", diffPath,
+      "--skills-root", SKILLS_ROOT,
+      "--repo-root", dir,
+      "--domains", "",
+    ]);
+  }
+
+  test("a Swift-only PR selects swift-conventions and skips typescript/webapp-conventions", () => {
+    const diff = [
+      "diff --git a/Sources/App/GameRoom.swift b/Sources/App/GameRoom.swift",
+      "new file mode 100644",
+      "index 0000000..1111111",
+      "--- /dev/null",
+      "+++ b/Sources/App/GameRoom.swift",
+      "@@ -0,0 +1,3 @@",
+      "+struct GameRoom {",
+      "+  let code: String",
+      "+}",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /65\s+swift-conventions/);
+    assert.match(stdout, /typescript-conventions: no changed file matches applies_to/);
+    assert.match(stdout, /webapp-conventions: no changed file matches applies_to/);
+  });
+
+  test("a TypeScript-only PR does not select swift-conventions", () => {
+    const diff = [
+      "diff --git a/web/utils.ts b/web/utils.ts",
+      "new file mode 100644",
+      "index 0000000..2222222",
+      "--- /dev/null",
+      "+++ b/web/utils.ts",
+      "@@ -0,0 +1,1 @@",
+      "+export const x = 1;",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /60\s+typescript-conventions/);
+    assert.match(stdout, /swift-conventions: no changed file matches applies_to/);
+  });
+
+  test("a mixed Swift + TypeScript PR selects both, each scoped to its own matched files", () => {
+    const diff = [
+      "diff --git a/Sources/App/GameRoom.swift b/Sources/App/GameRoom.swift",
+      "new file mode 100644",
+      "index 0000000..1111111",
+      "--- /dev/null",
+      "+++ b/Sources/App/GameRoom.swift",
+      "@@ -0,0 +1,1 @@",
+      "+struct GameRoom {}",
+      "diff --git a/web/utils.ts b/web/utils.ts",
+      "new file mode 100644",
+      "index 0000000..2222222",
+      "--- /dev/null",
+      "+++ b/web/utils.ts",
+      "@@ -0,0 +1,1 @@",
+      "+export const x = 1;",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /swift-conventions[\s\S]*matched: Sources\/App\/GameRoom\.swift/);
+    assert.match(stdout, /typescript-conventions[\s\S]*matched: web\/utils\.ts/);
+  });
+});

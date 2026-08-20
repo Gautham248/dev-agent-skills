@@ -19,6 +19,12 @@
       "order": 60
     },
     {
+      "skill": "swift-conventions",
+      "concern": "generic Swift idiom",
+      "applies_to": [".swift"],
+      "order": 65
+    },
+    {
       "skill": "webapp-conventions",
       "concern": "web platform behaviour",
       "applies_to": [".ts", ".tsx", ".jsx", ".svelte", ".vue", ".astro"],
