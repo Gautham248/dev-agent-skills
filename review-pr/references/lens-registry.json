@@ -37,6 +37,12 @@
       "order": 66
     },
     {
+      "skill": "swiftui-app-conventions",
+      "concern": "SwiftUI state ownership, dependency injection, app structure",
+      "applies_to": ["View", "Screens/", "App.swift", "AppState"],
+      "order": 67
+    },
+    {
       "skill": "webapp-conventions",
       "concern": "web platform behaviour",
       "applies_to": [".ts", ".tsx", ".jsx", ".svelte", ".vue", ".astro"],

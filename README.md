@@ -31,6 +31,7 @@ in your AI IDE instantly.
 | [`skill-factory`](./skill-factory/) | Interviews the requester through a structured clarification protocol, then designs, writes, and validates a n… |
 | [`skill-update`](./skill-update/) | Use when the user wants to update, refresh, sync, or pull the latest version of one or all tracked external s… |
 | [`swift-conventions`](./swift-conventions/) | A Swift language convention baseline grounded in four verified official sources: The Swift Programming Langua… |
+| [`swiftui-app-conventions`](./swiftui-app-conventions/) | SwiftUI app-architecture conventions — state ownership rules (@State/@Binding/@Environment/@Bindable), where… |
 | [`sync-prs`](./sync-prs/) | Use when the user asks to sync, check, refresh, or triage their own open GitHub pull requests — phrases like… |
 | [`typescript-conventions`](./typescript-conventions/) | A TypeScript convention baseline for typing, validation, enum handling, imports, and naming — favoring types… |
 | [`webapp-conventions`](./webapp-conventions/) | Portable conventions for building features in a SvelteKit + Tailwind web app — the layer above raw framework… |

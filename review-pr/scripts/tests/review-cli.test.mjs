@@ -625,4 +625,39 @@ describe("review-cli.mjs plan — real lens-registry.json, real skills-root", ()
     assert.equal(status, 0);
     assert.match(stdout, /better-auth-conventions: no changed file matches applies_to/);
   });
+
+  test("a SwiftUI view file under Screens/ selects swiftui-app-conventions", () => {
+    const diff = [
+      "diff --git a/Lio/Screens/Main/TasksViews.swift b/Lio/Screens/Main/TasksViews.swift",
+      "new file mode 100644",
+      "index 0000000..7777777",
+      "--- /dev/null",
+      "+++ b/Lio/Screens/Main/TasksViews.swift",
+      "@@ -0,0 +1,2 @@",
+      "+struct TasksView: View {",
+      "+}",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /67\s+swiftui-app-conventions/);
+  });
+
+  test("a plain data model file (no View/Screens/App/AppState signal) does not select swiftui-app-conventions", () => {
+    const diff = [
+      "diff --git a/Lio/Models/Models.swift b/Lio/Models/Models.swift",
+      "new file mode 100644",
+      "index 0000000..9999999",
+      "--- /dev/null",
+      "+++ b/Lio/Models/Models.swift",
+      "@@ -0,0 +1,1 @@",
+      "+struct Task: Codable { let id: UUID }",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /swiftui-app-conventions: no changed file matches applies_to/);
+  });
 });
