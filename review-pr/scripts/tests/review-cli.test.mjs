@@ -312,6 +312,113 @@ describe("review-cli.mjs post --pre-existing-compile-errors / --sibling-context 
   });
 });
 
+describe("review-cli.mjs post --completeness-checks — real subprocess", () => {
+  test("renders the counts in both console output and the posted body", () => {
+    const dir = makeTmpDir();
+    const diffPath = path.join(dir, "pr.diff");
+    const findingsPath = path.join(dir, "findings.json");
+    const completenessPath = path.join(dir, "completeness.json");
+
+    fs.writeFileSync(diffPath, SAMPLE_DIFF);
+    fs.writeFileSync(findingsPath, JSON.stringify([]));
+    fs.writeFileSync(completenessPath, JSON.stringify({ stateMutation: 2, identity: 1, resourceCleanup: 0 }));
+
+    const { stdout, status } = runCli([
+      "post",
+      "--repo", "org/game",
+      "--pr", "42",
+      "--diff", diffPath,
+      "--findings", findingsPath,
+      "--completeness-checks", completenessPath,
+      "--head-sha", "deadbeef",
+      "--dry-run",
+    ]);
+
+    assert.equal(status, 0);
+    assert.match(stdout, /completeness gate: 2 state-mutation, 1 identity, 0 resource-cleanup candidate\(s\) traced/);
+
+    const jsonStart = stdout.indexOf("{");
+    const payload = JSON.parse(stdout.slice(jsonStart));
+    assert.ok(payload.body.includes("Completeness gate"));
+    assert.ok(payload.body.includes("2 state-mutation"));
+  });
+
+  test("all-zero counts are omitted from the posted body (nothing to prove ran)", () => {
+    const dir = makeTmpDir();
+    const diffPath = path.join(dir, "pr.diff");
+    const findingsPath = path.join(dir, "findings.json");
+    const completenessPath = path.join(dir, "completeness.json");
+    fs.writeFileSync(diffPath, SAMPLE_DIFF);
+    fs.writeFileSync(findingsPath, JSON.stringify([]));
+    fs.writeFileSync(completenessPath, JSON.stringify({ stateMutation: 0, identity: 0, resourceCleanup: 0 }));
+
+    const { stdout, status } = runCli([
+      "post", "--repo", "org/game", "--pr", "42",
+      "--diff", diffPath, "--findings", findingsPath,
+      "--completeness-checks", completenessPath,
+      "--head-sha", "deadbeef", "--dry-run",
+    ]);
+    assert.equal(status, 0);
+    const jsonStart = stdout.indexOf("{");
+    const payload = JSON.parse(stdout.slice(jsonStart));
+    assert.ok(!payload.body.includes("Completeness gate"));
+  });
+
+  test("flag omitted entirely: no completeness line anywhere, unaffected otherwise", () => {
+    const dir = makeTmpDir();
+    const diffPath = path.join(dir, "pr.diff");
+    const findingsPath = path.join(dir, "findings.json");
+    fs.writeFileSync(diffPath, SAMPLE_DIFF);
+    fs.writeFileSync(findingsPath, JSON.stringify([]));
+
+    const { stdout, status } = runCli([
+      "post", "--repo", "org/game", "--pr", "42",
+      "--diff", diffPath, "--findings", findingsPath,
+      "--head-sha", "deadbeef", "--dry-run",
+    ]);
+    assert.equal(status, 0);
+    assert.ok(!stdout.includes("completeness gate"));
+  });
+
+  test("malformed JSON in --completeness-checks fails loudly", () => {
+    const dir = makeTmpDir();
+    const diffPath = path.join(dir, "pr.diff");
+    const findingsPath = path.join(dir, "findings.json");
+    const completenessPath = path.join(dir, "completeness.json");
+    fs.writeFileSync(diffPath, SAMPLE_DIFF);
+    fs.writeFileSync(findingsPath, JSON.stringify([]));
+    fs.writeFileSync(completenessPath, "{not valid json");
+
+    const { status, stderr } = runCli([
+      "post", "--repo", "org/game", "--pr", "42",
+      "--diff", diffPath, "--findings", findingsPath,
+      "--completeness-checks", completenessPath,
+      "--head-sha", "deadbeef", "--dry-run",
+    ]);
+    assert.notEqual(status, 0);
+    assert.match(stderr, /--completeness-checks file is not valid JSON/);
+  });
+
+  test("--completeness-checks given a JSON array instead of an object fails with the correct shape hint, not sibling-context's", () => {
+    const dir = makeTmpDir();
+    const diffPath = path.join(dir, "pr.diff");
+    const findingsPath = path.join(dir, "findings.json");
+    const completenessPath = path.join(dir, "completeness.json");
+    fs.writeFileSync(diffPath, SAMPLE_DIFF);
+    fs.writeFileSync(findingsPath, JSON.stringify([]));
+    fs.writeFileSync(completenessPath, JSON.stringify(["not", "an", "object"]));
+
+    const { status, stderr } = runCli([
+      "post", "--repo", "org/game", "--pr", "42",
+      "--diff", diffPath, "--findings", findingsPath,
+      "--completeness-checks", completenessPath,
+      "--head-sha", "deadbeef", "--dry-run",
+    ]);
+    assert.notEqual(status, 0);
+    assert.match(stderr, /--completeness-checks must be a JSON object of \{ stateMutation, identity, resourceCleanup \}/);
+  });
+});
+
 describe("review-cli.mjs post --dry-run --architecture-review — real subprocess", () => {
   test("the dry-run payload body includes the Architecture review section", () => {
     const dir = makeTmpDir();

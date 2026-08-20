@@ -338,6 +338,50 @@ The evidence requirement is not bureaucracy. A finding that cannot quote the
 line it is about is a finding about a line that may not exist, and the
 validator in Step 5 rejects it on precisely that basis.
 
+## Step 4c -- Mandatory completeness gate
+
+`first-principles-review`'s own "trace, don't read" methodology already
+says to git-grep every caller and trace every write path -- this step
+makes three specific categories of that tracing **mandatory**, not
+advisory, since a single fresh pass over a large diff can otherwise simply
+not get to every candidate. Full reasoning: `references/completeness-gate.md`.
+
+Runs on **every** review, not just ones that crossed Step 2b's threshold --
+these bugs don't scale with PR size. Find the candidates:
+
+```bash
+node --input-type=module -e "
+import { parseUnifiedDiff, findCompletenessCandidates, expandCandidatesWithSubsystems } from 'review-lib.mjs';
+const files = parseUnifiedDiff(<diff text>);
+let candidates = findCompletenessCandidates(files);
+// If Step 2b ran: candidates = expandCandidatesWithSubsystems(candidates, cache.subsystems);
+console.log(JSON.stringify(candidates));
+"
+```
+
+For every candidate in `stateMutation`: read the enclosing function in the
+real checked-out file, trace every code path through it and every caller,
+and confirm the computed value is actually persisted (`+=`, `.save(`,
+`.update(`, `.set(`) on **every** path, not just the one the diff shows.
+
+For every candidate in `identity`: trace whether a server-issued,
+unguessable value backs this check anywhere (`git grep -i 'session\|token\|
+secret\|randomUUID\|crypto\.'`). If the candidate is a removal or a "looks
+unused" observation, this trace is mandatory before agreeing it's dead
+code -- "the variable is unused" and "the security property is gone" are
+different claims.
+
+For every candidate in `resourceCreate`: trace every exit path (normal,
+early return, error, disconnect/unmount) and confirm a matching cleanup
+call exists on each one.
+
+A confirmed gap becomes a normal finding -- same pipeline, `lens:
+"completeness-gate"`, passes Step 5's `validateFinding` unchanged. A
+confirmed-clean trace produces no finding but gets counted
+(`{ stateMutation: n, identity: n, resourceCleanup: n }`) for Step 9's
+summary, so a clean run is provable, not indistinguishable from a gate
+that silently didn't run.
+
 ## Step 5 -- Validate, dedupe, suppress
 
 ```bash

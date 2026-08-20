@@ -832,6 +832,100 @@ export function dedupeCoverageFindings(findings) {
 }
 
 // ---------------------------------------------------------------------------
+// Step 4c — mandatory completeness gate
+// ---------------------------------------------------------------------------
+//
+// first-principles-review's own "Pillar 2: Trace, don't read" methodology
+// already says to git-grep every caller and trace every write path -- this
+// gate exists because that's advisory, not enforced, and on a large diff a
+// single fresh reasoning pass can simply not get to every candidate. These
+// three categories were chosen because two of them are the exact real
+// misses that motivated this gate (a computed score never written back; an
+// identity check reclassified as dead code without checking whether the
+// responsibility moved elsewhere) and the third (resource cleanup) is the
+// same shape of bug in a timer/socket-heavy codebase: a handle created
+// without a traceable cleanup on every exit path.
+//
+// The regexes below are deliberately coarse keyword matches over added
+// diff lines, not real static analysis -- they decide WHERE a trace is
+// mandatory, never WHETHER something is actually a bug. That determination
+// requires reading the real function body and its callers, which is the
+// LLM step's job (SKILL.md Step 4c), the same "trace, don't read" work
+// Pillar 2 already describes. Over-triggering here (a candidate that turns
+// out fine) costs one extra trace; under-triggering is the failure mode
+// this gate exists to close, so these regexes lean broad on purpose.
+
+export const STATE_MUTATION_KEYWORD_RE = /\b(scor\w*|balanc\w*|points?|credits?|totalScore|amounts?)\b/i;
+export const IDENTITY_KEYWORD_RE = /\b(clientId|sessionId|userId|adminId|isAdmin|token)\b/i;
+export const RESOURCE_CREATE_RE = /\b(setTimeout|setInterval)\s*\(|\.on\(|addEventListener\(|\.subscribe\(/;
+export const RESOURCE_CLEANUP_RE = /clearTimeout\(|clearInterval\(|\.off\(|removeEventListener\(|\.unsubscribe\(/;
+
+/**
+ * Scans every added line in the diff against the three trigger regexes.
+ * Pure and cheap -- runs on every review, not gated behind Step 2b's
+ * broad-PR threshold, since a state-mutation or identity bug can exist in
+ * a 3-file PR as easily as a 68-file one. A PR that matches nothing
+ * produces three empty arrays and the gate is a genuine no-op, not a
+ * skipped check -- the cost only shows up when there's something to trace.
+ */
+export function findCompletenessCandidates(files) {
+  const result = { stateMutation: [], identity: [], resourceCreate: [] };
+  for (const file of files || []) {
+    for (const anchor of file.anchors.values()) {
+      if (anchor.side !== "RIGHT" || anchor.kind !== "added") continue;
+      const text = anchor.content || "";
+      if (STATE_MUTATION_KEYWORD_RE.test(text)) {
+        result.stateMutation.push({ file: file.path, line: anchor.line, text });
+      }
+      if (IDENTITY_KEYWORD_RE.test(text)) {
+        result.identity.push({ file: file.path, line: anchor.line, text });
+      }
+      if (RESOURCE_CREATE_RE.test(text)) {
+        result.resourceCreate.push({ file: file.path, line: anchor.line, text });
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Widens candidates using architecture-context's subsystem summaries, when
+ * Step 2b ran. A subsystem-level semantic signal ("state-sync", "scoring")
+ * is stronger evidence than a line-level keyword match, and catches cases
+ * the line-level regex misses entirely -- e.g. a value written through a
+ * helper function whose call site doesn't literally contain the word
+ * "score". This is architecture-context's subsystem model actively
+ * driving what gets traced, not just framing text a lens may or may not
+ * read closely.
+ *
+ * Subsystem-derived candidates carry `line: null` -- there's no specific
+ * diff line to point at, the whole subsystem's anchor_files are in scope
+ * for the trace.
+ */
+export function expandCandidatesWithSubsystems(candidates, subsystems) {
+  const result = {
+    stateMutation: [...candidates.stateMutation],
+    identity: [...candidates.identity],
+    resourceCreate: [...candidates.resourceCreate],
+  };
+
+  for (const [id, entry] of Object.entries(subsystems || {})) {
+    const summary = entry?.summary || "";
+    const anchorFiles = entry?.anchor_files || [];
+    const addToCategory = (category, re) => {
+      if (!re.test(summary)) return;
+      for (const file of anchorFiles) {
+        result[category].push({ file, line: null, text: `(subsystem: ${id})` });
+      }
+    };
+    addToCategory("stateMutation", STATE_MUTATION_KEYWORD_RE);
+    addToCategory("identity", IDENTITY_KEYWORD_RE);
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Step 1b — compiler/type-checker diagnostics
 // ---------------------------------------------------------------------------
 //
@@ -1151,6 +1245,7 @@ export function renderSummary({
   architectureReview = null,
   preExistingCompileErrors = [],
   siblingContext = null,
+  completenessChecks = null,
 }) {
   const counts = { blocker: 0, should: 0, nit: 0 };
   for (const f of findings) counts[f.severity]++;
@@ -1203,6 +1298,23 @@ export function renderSummary({
       out.push(`- \`${d.file}:${d.line}\` — ${d.message}`);
     }
     out.push("");
+  }
+
+  // Step 4c completeness gate — counts only, not a list: a confirmed-clean
+  // trace produces no finding (correctly), but must still be provable as
+  // having run, rather than silently indistinguishable from not running at
+  // all. Any actual gap already appears as a normal finding above with
+  // lens "completeness-gate" — this line is purely "here's what was
+  // checked," not a duplicate report of what was found.
+  if (completenessChecks) {
+    const { stateMutation = 0, identity = 0, resourceCleanup = 0 } = completenessChecks;
+    if (stateMutation || identity || resourceCleanup) {
+      out.push(
+        `_Completeness gate: ${stateMutation} state-mutation, ${identity} identity, ` +
+          `${resourceCleanup} resource-cleanup candidate(s) traced._`
+      );
+      out.push("");
+    }
   }
 
   // Broad-scope architect pass (Step 2b) — only present for PRs that

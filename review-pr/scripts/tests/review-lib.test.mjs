@@ -58,6 +58,11 @@ import {
   classifyDiagnosticsAgainstDiff,
   compilerDiagnosticToFinding,
   extractSiblingPrRefs,
+  findCompletenessCandidates,
+  expandCandidatesWithSubsystems,
+  STATE_MUTATION_KEYWORD_RE,
+  IDENTITY_KEYWORD_RE,
+  RESOURCE_CREATE_RE,
 } from "../review-lib.mjs";
 
 // ---------------------------------------------------------------------------
@@ -1697,6 +1702,192 @@ describe("renderSummary — pre-existing compile errors and sibling context", ()
   test("omits the context note when there is nothing to report", () => {
     const summary = renderSummary(baseArgs({ siblingContext: { generalCommentCount: 0, siblingPr: null } }));
     assert.ok(!summary.includes("Context considered"));
+  });
+
+  test("renders completeness-gate counts when any category is non-zero", () => {
+    const summary = renderSummary(
+      baseArgs({ completenessChecks: { stateMutation: 2, identity: 1, resourceCleanup: 0 } })
+    );
+    assert.ok(summary.includes("Completeness gate"));
+    assert.ok(summary.includes("2 state-mutation"));
+    assert.ok(summary.includes("1 identity"));
+    assert.ok(summary.includes("0 resource-cleanup"));
+  });
+
+  test("omits the completeness-gate line when all counts are zero (nothing to prove ran)", () => {
+    const summary = renderSummary(
+      baseArgs({ completenessChecks: { stateMutation: 0, identity: 0, resourceCleanup: 0 } })
+    );
+    assert.ok(!summary.includes("Completeness gate"));
+  });
+
+  test("omits the completeness-gate line entirely when not passed at all", () => {
+    const summary = renderSummary(baseArgs({}));
+    assert.ok(!summary.includes("Completeness gate"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 4c — mandatory completeness gate
+// ---------------------------------------------------------------------------
+//
+// The two "real bug" tests below use the EXACT lines from the actual
+// investigation that motivated this gate (traced by hand, over several
+// turns, against the real fluffy-memory/emoji repo) -- not synthesized
+// examples. If these ever stop passing, the gate has regressed on the
+// precise cases it exists to catch.
+
+describe("findCompletenessCandidates — trigger regexes", () => {
+  test("REAL BUG 1: flags the exact line that hid the lost-points bug", () => {
+    const diff = [
+      "diff --git a/gameController.ts b/gameController.ts",
+      "index 1111111..2222222 100644",
+      "--- a/gameController.ts",
+      "+++ b/gameController.ts",
+      "@@ -320,10 +320,10 @@",
+      "+\t\tconst results = Array.from(game.currentTurnGuesses?.values() || []).map((guess) => {",
+      "+\t\t\treturn { playerId: guess.playerId, score: guess.score };",
+      "+\t\t});",
+      "",
+    ].join("\n");
+    const candidates = findCompletenessCandidates(parseUnifiedDiff(diff));
+    assert.equal(candidates.stateMutation.length, 1);
+    assert.equal(candidates.stateMutation[0].file, "gameController.ts");
+    assert.match(candidates.stateMutation[0].text, /guess\.score/);
+  });
+
+  test("REAL BUG 2: flags the exact line that hid the clientId impersonation bug", () => {
+    const diff = [
+      "diff --git a/socketSetup.ts b/socketSetup.ts",
+      "index 3333333..4444444 100644",
+      "--- a/socketSetup.ts",
+      "+++ b/socketSetup.ts",
+      "@@ -160,6 +160,6 @@",
+      "+\t\t\tfor (const [sid, player] of room.members.entries()) {",
+      "+\t\t\t\tif (player.clientId === incomingClientId) {",
+      "+\t\t\t\t\texistingPlayer = player;",
+      "+\t\t\t\t}",
+      "+\t\t\t}",
+      "",
+    ].join("\n");
+    const candidates = findCompletenessCandidates(parseUnifiedDiff(diff));
+    assert.equal(candidates.identity.length, 1);
+    assert.equal(candidates.identity[0].file, "socketSetup.ts");
+    assert.match(candidates.identity[0].text, /clientId/);
+  });
+
+  test("flags a setTimeout with no visible clearTimeout as a resource-create candidate", () => {
+    const diff = [
+      "diff --git a/x.ts b/x.ts",
+      "index 1111111..2222222 100644",
+      "--- a/x.ts",
+      "+++ b/x.ts",
+      "@@ -1,3 +1,3 @@",
+      "+function schedule() {",
+      "+\tsetTimeout(() => { doThing(); }, 1000);",
+      "+}",
+      "",
+    ].join("\n");
+    const candidates = findCompletenessCandidates(parseUnifiedDiff(diff));
+    assert.equal(candidates.resourceCreate.length, 1);
+  });
+
+  test("a diff with none of the three keywords produces three empty arrays — genuine no-op", () => {
+    const diff = [
+      "diff --git a/x.ts b/x.ts",
+      "index 1111111..2222222 100644",
+      "--- a/x.ts",
+      "+++ b/x.ts",
+      "@@ -1,2 +1,2 @@",
+      "+export function add(a: number, b: number) {",
+      "+\treturn a + b;",
+      "}",
+      "",
+    ].join("\n");
+    const candidates = findCompletenessCandidates(parseUnifiedDiff(diff));
+    assert.equal(candidates.stateMutation.length, 0);
+    assert.equal(candidates.identity.length, 0);
+    assert.equal(candidates.resourceCreate.length, 0);
+  });
+
+  test("only scans ADDED lines, not removed or context lines", () => {
+    const diff = [
+      "diff --git a/x.ts b/x.ts",
+      "index 1111111..2222222 100644",
+      "--- a/x.ts",
+      "+++ b/x.ts",
+      "@@ -1,3 +1,3 @@",
+      " const totalScore = 0; // context line, unchanged",
+      "-const oldScore = balance; // removed line",
+      "+const label = 'unrelated'; // added line, no keyword",
+      "",
+    ].join("\n");
+    const candidates = findCompletenessCandidates(parseUnifiedDiff(diff));
+    assert.equal(candidates.stateMutation.length, 0);
+  });
+
+  test("handles an empty file list without throwing", () => {
+    assert.deepEqual(findCompletenessCandidates([]), { stateMutation: [], identity: [], resourceCreate: [] });
+    assert.deepEqual(findCompletenessCandidates(undefined), { stateMutation: [], identity: [], resourceCreate: [] });
+  });
+});
+
+describe("keyword regex constants — sanity checks", () => {
+  test("STATE_MUTATION_KEYWORD_RE matches common scoring/economy terms", () => {
+    for (const w of ["score", "totalScore", "balance", "points", "credits", "amount"]) {
+      assert.ok(STATE_MUTATION_KEYWORD_RE.test(`const x = ${w};`), `expected match for ${w}`);
+    }
+  });
+
+  test("IDENTITY_KEYWORD_RE matches common identity/auth terms", () => {
+    for (const w of ["clientId", "sessionId", "userId", "adminId", "isAdmin", "token"]) {
+      assert.ok(IDENTITY_KEYWORD_RE.test(`const x = ${w};`), `expected match for ${w}`);
+    }
+  });
+
+  test("RESOURCE_CREATE_RE matches timer and listener creation, not their cleanup counterparts", () => {
+    assert.ok(RESOURCE_CREATE_RE.test("setTimeout(fn, 100)"));
+    assert.ok(RESOURCE_CREATE_RE.test("socket.on('event', fn)"));
+    assert.ok(!RESOURCE_CREATE_RE.test("clearTimeout(handle)"));
+  });
+});
+
+describe("expandCandidatesWithSubsystems — architecture-context as an active trigger", () => {
+  test("adds a subsystem's anchor_files as state-mutation candidates when its summary mentions scoring", () => {
+    const base = { stateMutation: [], identity: [], resourceCreate: [] };
+    const subsystems = {
+      "state-sync": {
+        summary: "Server-authoritative scoring and state broadcast to clients.",
+        anchor_files: ["net/sync.ts", "server/rooms/GameRoom.ts"],
+      },
+    };
+    const result = expandCandidatesWithSubsystems(base, subsystems);
+    assert.equal(result.stateMutation.length, 2);
+    assert.equal(result.stateMutation[0].line, null);
+    assert.match(result.stateMutation[0].text, /state-sync/);
+  });
+
+  test("does not add a subsystem to identity candidates if its summary has no identity language", () => {
+    const base = { stateMutation: [], identity: [], resourceCreate: [] };
+    const subsystems = {
+      ui: { summary: "Renders the emoji picker and chat panel.", anchor_files: ["components/EmojiPicker.svelte"] },
+    };
+    const result = expandCandidatesWithSubsystems(base, subsystems);
+    assert.equal(result.identity.length, 0);
+    assert.equal(result.stateMutation.length, 0);
+  });
+
+  test("preserves original line-level candidates alongside subsystem-derived ones", () => {
+    const base = { stateMutation: [{ file: "a.ts", line: 10, text: "score" }], identity: [], resourceCreate: [] };
+    const subsystems = { s: { summary: "scoring logic", anchor_files: ["b.ts"] } };
+    const result = expandCandidatesWithSubsystems(base, subsystems);
+    assert.equal(result.stateMutation.length, 2);
+  });
+
+  test("handles no subsystems (Step 2b didn't run) without throwing", () => {
+    const base = { stateMutation: [], identity: [], resourceCreate: [] };
+    assert.deepEqual(expandCandidatesWithSubsystems(base, null), base);
+    assert.deepEqual(expandCandidatesWithSubsystems(base, undefined), base);
   });
 });
 
