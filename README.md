@@ -9,6 +9,7 @@ in your AI IDE instantly.
 | Skill | What it does |
 |---|---|
 | [`architecture-context`](./architecture-context/) | Use to answer "what kind of system is this project, architecturally" -- not "what does this diff do" (that's… |
+| [`cloudkit-conventions`](./cloudkit-conventions/) | CloudKit framework conventions grounded in Apple's official documentation and WWDC guidance (developer.apple.… |
 | [`coding-standards`](./coding-standards/) | Company coding standards for frontend, backend, and database work. Use whenever writing or modifying applicat… |
 | [`coding-standards-backend`](./coding-standards-backend/) | Company backend conventions for API endpoints, middleware, and background jobs -- file-based endpoint structu… |
 | [`coding-standards-database`](./coding-standards-database/) | Company database conventions -- schema-as-source-of-truth, model/field naming, column type rules (decimal mon… |

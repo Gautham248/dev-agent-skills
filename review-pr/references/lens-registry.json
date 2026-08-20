@@ -25,6 +25,12 @@
       "order": 65
     },
     {
+      "skill": "cloudkit-conventions",
+      "concern": "CloudKit sync, sharing, and error handling",
+      "applies_to": ["CloudKit"],
+      "order": 66
+    },
+    {
       "skill": "webapp-conventions",
       "concern": "web platform behaviour",
       "applies_to": [".ts", ".tsx", ".jsx", ".svelte", ".vue", ".astro"],

@@ -553,4 +553,41 @@ describe("review-cli.mjs plan — real lens-registry.json, real skills-root", ()
     assert.match(stdout, /swift-conventions[\s\S]*matched: Sources\/App\/GameRoom\.swift/);
     assert.match(stdout, /typescript-conventions[\s\S]*matched: web\/utils\.ts/);
   });
+
+  test("a Swift PR touching a CloudKit-named file selects cloudkit-conventions in addition to swift-conventions", () => {
+    const diff = [
+      "diff --git a/Lio/Services/CloudKitService.swift b/Lio/Services/CloudKitService.swift",
+      "new file mode 100644",
+      "index 0000000..3333333",
+      "--- /dev/null",
+      "+++ b/Lio/Services/CloudKitService.swift",
+      "@@ -0,0 +1,2 @@",
+      "+import CloudKit",
+      "+final class CloudKitService {}",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /65\s+swift-conventions/);
+    assert.match(stdout, /66\s+cloudkit-conventions/);
+  });
+
+  test("a Swift PR with no CloudKit-named file does not select cloudkit-conventions", () => {
+    const diff = [
+      "diff --git a/Lio/Screens/Main/TasksViews.swift b/Lio/Screens/Main/TasksViews.swift",
+      "new file mode 100644",
+      "index 0000000..4444444",
+      "--- /dev/null",
+      "+++ b/Lio/Screens/Main/TasksViews.swift",
+      "@@ -0,0 +1,1 @@",
+      "+struct TasksView {}",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /65\s+swift-conventions/);
+    assert.match(stdout, /cloudkit-conventions: no changed file matches applies_to/);
+  });
 });
