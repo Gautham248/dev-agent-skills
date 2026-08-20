@@ -9,6 +9,8 @@ in your AI IDE instantly.
 | Skill | What it does |
 |---|---|
 | [`architecture-context`](./architecture-context/) | Use to answer "what kind of system is this project, architecturally" -- not "what does this diff do" (that's… |
+| [`better-auth-conventions`](./better-auth-conventions/) | Better Auth conventions grounded in the official documentation (better-auth.com/docs), fetched and read direc… |
+| [`cloudkit-conventions`](./cloudkit-conventions/) | CloudKit framework conventions grounded in Apple's official documentation and WWDC guidance (developer.apple.… |
 | [`coding-standards`](./coding-standards/) | Company coding standards for frontend, backend, and database work. Use whenever writing or modifying applicat… |
 | [`coding-standards-backend`](./coding-standards-backend/) | Company backend conventions for API endpoints, middleware, and background jobs -- file-based endpoint structu… |
 | [`coding-standards-database`](./coding-standards-database/) | Company database conventions -- schema-as-source-of-truth, model/field naming, column type rules (decimal mon… |
@@ -24,11 +26,13 @@ in your AI IDE instantly.
 | [`graphify`](./graphify/) | Use for any question about a codebase, its architecture, file relationships, or project content — especially… |
 | [`investigate-issue`](./investigate-issue/) | Use when a developer points at an existing GitHub issue and wants it investigated and taken forward — phrases… |
 | [`plan-feature`](./plan-feature/) | Use when a developer wants to plan a new feature before building it — phrases like "plan this feature", "writ… |
+| [`revenuecat-conventions`](./revenuecat-conventions/) | RevenueCat conventions grounded in the official documentation (revenuecat.com/docs), fetched and read directl… |
 | [`review-pr`](./review-pr/) | Review a GitHub pull request you have been asked or assigned to review, and post the review back to GitHub as… |
 | [`skill-add`](./skill-add/) | Use when the user wants to add, import, or install a new external skill from a git repository — phrases like… |
 | [`skill-factory`](./skill-factory/) | Interviews the requester through a structured clarification protocol, then designs, writes, and validates a n… |
 | [`skill-update`](./skill-update/) | Use when the user wants to update, refresh, sync, or pull the latest version of one or all tracked external s… |
 | [`swift-conventions`](./swift-conventions/) | A Swift language convention baseline grounded in four verified official sources: The Swift Programming Langua… |
+| [`swiftui-app-conventions`](./swiftui-app-conventions/) | SwiftUI app-architecture conventions — state ownership rules (@State/@Binding/@Environment/@Bindable), where… |
 | [`sync-prs`](./sync-prs/) | Use when the user asks to sync, check, refresh, or triage their own open GitHub pull requests — phrases like… |
 | [`typescript-conventions`](./typescript-conventions/) | A TypeScript convention baseline for typing, validation, enum handling, imports, and naming — favoring types… |
 | [`webapp-conventions`](./webapp-conventions/) | Portable conventions for building features in a SvelteKit + Tailwind web app — the layer above raw framework… |
@@ -154,6 +158,7 @@ for the full rule list.
 | Codex | `mkdir -p ~/.codex/skills && ln -s ~/dev-agent-skills/* ~/.codex/skills/` |
 | Cursor / OpenCode | `mkdir -p .agents/skills && ln -s ~/dev-agent-skills/* .agents/skills/` |
 | Gemini CLI | `mkdir -p ~/.config/gemini/skills && ln -s ~/dev-agent-skills/* ~/.config/gemini/skills/` |
+| Command Code | `mkdir -p ~/.commandcode/skills && ln -s ~/dev-agent-skills/* ~/.commandcode/skills/` |
 
 ## Adding a new skill
 

@@ -19,10 +19,34 @@
       "order": 60
     },
     {
+      "skill": "better-auth-conventions",
+      "concern": "Better Auth config, sessions, social sign-on, tokens",
+      "applies_to": ["lib/auth", "auth.ts", "auth-client.ts"],
+      "order": 61
+    },
+    {
       "skill": "swift-conventions",
       "concern": "generic Swift idiom",
       "applies_to": [".swift"],
       "order": 65
+    },
+    {
+      "skill": "cloudkit-conventions",
+      "concern": "CloudKit sync, sharing, and error handling",
+      "applies_to": ["CloudKit"],
+      "order": 66
+    },
+    {
+      "skill": "swiftui-app-conventions",
+      "concern": "SwiftUI state ownership, dependency injection, app structure",
+      "applies_to": ["View", "Screens/", "App.swift", "AppState"],
+      "order": 67
+    },
+    {
+      "skill": "revenuecat-conventions",
+      "concern": "RevenueCat entitlements, paywalls, restore, webhooks",
+      "applies_to": ["RevenueCat", "revenuecat", "Purchases", "Subscription"],
+      "order": 68
     },
     {
       "skill": "webapp-conventions",

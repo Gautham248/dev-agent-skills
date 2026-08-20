@@ -553,4 +553,162 @@ describe("review-cli.mjs plan — real lens-registry.json, real skills-root", ()
     assert.match(stdout, /swift-conventions[\s\S]*matched: Sources\/App\/GameRoom\.swift/);
     assert.match(stdout, /typescript-conventions[\s\S]*matched: web\/utils\.ts/);
   });
+
+  test("a Swift PR touching a CloudKit-named file selects cloudkit-conventions in addition to swift-conventions", () => {
+    const diff = [
+      "diff --git a/Lio/Services/CloudKitService.swift b/Lio/Services/CloudKitService.swift",
+      "new file mode 100644",
+      "index 0000000..3333333",
+      "--- /dev/null",
+      "+++ b/Lio/Services/CloudKitService.swift",
+      "@@ -0,0 +1,2 @@",
+      "+import CloudKit",
+      "+final class CloudKitService {}",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /65\s+swift-conventions/);
+    assert.match(stdout, /66\s+cloudkit-conventions/);
+  });
+
+  test("a Swift PR with no CloudKit-named file does not select cloudkit-conventions", () => {
+    const diff = [
+      "diff --git a/Lio/Screens/Main/TasksViews.swift b/Lio/Screens/Main/TasksViews.swift",
+      "new file mode 100644",
+      "index 0000000..4444444",
+      "--- /dev/null",
+      "+++ b/Lio/Screens/Main/TasksViews.swift",
+      "@@ -0,0 +1,1 @@",
+      "+struct TasksView {}",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /65\s+swift-conventions/);
+    assert.match(stdout, /cloudkit-conventions: no changed file matches applies_to/);
+  });
+
+  test("a PR touching lib/auth.ts selects better-auth-conventions", () => {
+    const diff = [
+      "diff --git a/packages/backend/src/lib/auth.ts b/packages/backend/src/lib/auth.ts",
+      "new file mode 100644",
+      "index 0000000..5555555",
+      "--- /dev/null",
+      "+++ b/packages/backend/src/lib/auth.ts",
+      "@@ -0,0 +1,2 @@",
+      '+import { betterAuth } from "better-auth";',
+      "+export const auth = betterAuth({});",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /61\s+better-auth-conventions/);
+  });
+
+  test("an unrelated backend route file does not select better-auth-conventions", () => {
+    const diff = [
+      "diff --git a/packages/backend/src/routes/tasks.ts b/packages/backend/src/routes/tasks.ts",
+      "new file mode 100644",
+      "index 0000000..6666666",
+      "--- /dev/null",
+      "+++ b/packages/backend/src/routes/tasks.ts",
+      "@@ -0,0 +1,1 @@",
+      "+export function listTasks() {}",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /better-auth-conventions: no changed file matches applies_to/);
+  });
+
+  test("a SwiftUI view file under Screens/ selects swiftui-app-conventions", () => {
+    const diff = [
+      "diff --git a/Lio/Screens/Main/TasksViews.swift b/Lio/Screens/Main/TasksViews.swift",
+      "new file mode 100644",
+      "index 0000000..7777777",
+      "--- /dev/null",
+      "+++ b/Lio/Screens/Main/TasksViews.swift",
+      "@@ -0,0 +1,2 @@",
+      "+struct TasksView: View {",
+      "+}",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /67\s+swiftui-app-conventions/);
+  });
+
+  test("a plain data model file (no View/Screens/App/AppState signal) does not select swiftui-app-conventions", () => {
+    const diff = [
+      "diff --git a/Lio/Models/Models.swift b/Lio/Models/Models.swift",
+      "new file mode 100644",
+      "index 0000000..9999999",
+      "--- /dev/null",
+      "+++ b/Lio/Models/Models.swift",
+      "@@ -0,0 +1,1 @@",
+      "+struct Task: Codable { let id: UUID }",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /swiftui-app-conventions: no changed file matches applies_to/);
+  });
+
+  test("a SwiftUI subscription/paywall view selects revenuecat-conventions", () => {
+    const diff = [
+      "diff --git a/Lio/Screens/Main/SubscriptionViews.swift b/Lio/Screens/Main/SubscriptionViews.swift",
+      "new file mode 100644",
+      "index 0000000..aaaaaaa",
+      "--- /dev/null",
+      "+++ b/Lio/Screens/Main/SubscriptionViews.swift",
+      "@@ -0,0 +1,1 @@",
+      "+struct PaywallView: View {}",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /68\s+revenuecat-conventions/);
+  });
+
+  test("a lowercase-named backend RevenueCat webhook handler selects revenuecat-conventions", () => {
+    const diff = [
+      "diff --git a/packages/backend/src/webhooks/revenuecat.ts b/packages/backend/src/webhooks/revenuecat.ts",
+      "new file mode 100644",
+      "index 0000000..bbbbbbb",
+      "--- /dev/null",
+      "+++ b/packages/backend/src/webhooks/revenuecat.ts",
+      "@@ -0,0 +1,1 @@",
+      "+export function handleWebhook() {}",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /68\s+revenuecat-conventions/);
+  });
+
+  test("an unrelated plain data model file does not select revenuecat-conventions", () => {
+    const diff = [
+      "diff --git a/Lio/Models/Models.swift b/Lio/Models/Models.swift",
+      "new file mode 100644",
+      "index 0000000..cccccccc",
+      "--- /dev/null",
+      "+++ b/Lio/Models/Models.swift",
+      "@@ -0,0 +1,1 @@",
+      "+struct Task: Codable { let id: UUID }",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /revenuecat-conventions: no changed file matches applies_to/);
+  });
 });
