@@ -590,4 +590,39 @@ describe("review-cli.mjs plan — real lens-registry.json, real skills-root", ()
     assert.match(stdout, /65\s+swift-conventions/);
     assert.match(stdout, /cloudkit-conventions: no changed file matches applies_to/);
   });
+
+  test("a PR touching lib/auth.ts selects better-auth-conventions", () => {
+    const diff = [
+      "diff --git a/packages/backend/src/lib/auth.ts b/packages/backend/src/lib/auth.ts",
+      "new file mode 100644",
+      "index 0000000..5555555",
+      "--- /dev/null",
+      "+++ b/packages/backend/src/lib/auth.ts",
+      "@@ -0,0 +1,2 @@",
+      '+import { betterAuth } from "better-auth";',
+      "+export const auth = betterAuth({});",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /61\s+better-auth-conventions/);
+  });
+
+  test("an unrelated backend route file does not select better-auth-conventions", () => {
+    const diff = [
+      "diff --git a/packages/backend/src/routes/tasks.ts b/packages/backend/src/routes/tasks.ts",
+      "new file mode 100644",
+      "index 0000000..6666666",
+      "--- /dev/null",
+      "+++ b/packages/backend/src/routes/tasks.ts",
+      "@@ -0,0 +1,1 @@",
+      "+export function listTasks() {}",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /better-auth-conventions: no changed file matches applies_to/);
+  });
 });

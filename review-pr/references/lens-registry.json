@@ -19,6 +19,12 @@
       "order": 60
     },
     {
+      "skill": "better-auth-conventions",
+      "concern": "Better Auth config, sessions, social sign-on, tokens",
+      "applies_to": ["lib/auth", "auth.ts", "auth-client.ts"],
+      "order": 61
+    },
+    {
       "skill": "swift-conventions",
       "concern": "generic Swift idiom",
       "applies_to": [".swift"],
