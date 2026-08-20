@@ -43,6 +43,12 @@
       "order": 67
     },
     {
+      "skill": "revenuecat-conventions",
+      "concern": "RevenueCat entitlements, paywalls, restore, webhooks",
+      "applies_to": ["RevenueCat", "revenuecat", "Purchases", "Subscription"],
+      "order": 68
+    },
+    {
       "skill": "webapp-conventions",
       "concern": "web platform behaviour",
       "applies_to": [".ts", ".tsx", ".jsx", ".svelte", ".vue", ".astro"],

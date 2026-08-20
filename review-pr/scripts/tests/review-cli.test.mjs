@@ -660,4 +660,55 @@ describe("review-cli.mjs plan — real lens-registry.json, real skills-root", ()
     assert.equal(status, 0);
     assert.match(stdout, /swiftui-app-conventions: no changed file matches applies_to/);
   });
+
+  test("a SwiftUI subscription/paywall view selects revenuecat-conventions", () => {
+    const diff = [
+      "diff --git a/Lio/Screens/Main/SubscriptionViews.swift b/Lio/Screens/Main/SubscriptionViews.swift",
+      "new file mode 100644",
+      "index 0000000..aaaaaaa",
+      "--- /dev/null",
+      "+++ b/Lio/Screens/Main/SubscriptionViews.swift",
+      "@@ -0,0 +1,1 @@",
+      "+struct PaywallView: View {}",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /68\s+revenuecat-conventions/);
+  });
+
+  test("a lowercase-named backend RevenueCat webhook handler selects revenuecat-conventions", () => {
+    const diff = [
+      "diff --git a/packages/backend/src/webhooks/revenuecat.ts b/packages/backend/src/webhooks/revenuecat.ts",
+      "new file mode 100644",
+      "index 0000000..bbbbbbb",
+      "--- /dev/null",
+      "+++ b/packages/backend/src/webhooks/revenuecat.ts",
+      "@@ -0,0 +1,1 @@",
+      "+export function handleWebhook() {}",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /68\s+revenuecat-conventions/);
+  });
+
+  test("an unrelated plain data model file does not select revenuecat-conventions", () => {
+    const diff = [
+      "diff --git a/Lio/Models/Models.swift b/Lio/Models/Models.swift",
+      "new file mode 100644",
+      "index 0000000..cccccccc",
+      "--- /dev/null",
+      "+++ b/Lio/Models/Models.swift",
+      "@@ -0,0 +1,1 @@",
+      "+struct Task: Codable { let id: UUID }",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /revenuecat-conventions: no changed file matches applies_to/);
+  });
 });
