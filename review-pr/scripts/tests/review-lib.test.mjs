@@ -15,6 +15,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 import {
   expandManifestLenses,
@@ -44,6 +47,22 @@ import {
   dropAlreadyRaised,
   detectInjectionAttempts,
   planDiffChunks,
+  shouldRunArchitectCheck,
+  validateCoverageFinding,
+  dedupeCoverageFindings,
+  DEFAULT_ARCHITECT_FILE_THRESHOLD,
+  DEFAULT_ARCHITECT_SUBSYSTEM_THRESHOLD,
+  detectTypecheckCommand,
+  parseTscDiagnostics,
+  parseSvelteCheckDiagnostics,
+  classifyDiagnosticsAgainstDiff,
+  compilerDiagnosticToFinding,
+  extractSiblingPrRefs,
+  findCompletenessCandidates,
+  expandCandidatesWithSubsystems,
+  STATE_MUTATION_KEYWORD_RE,
+  IDENTITY_KEYWORD_RE,
+  RESOURCE_CREATE_RE,
 } from "../review-lib.mjs";
 
 // ---------------------------------------------------------------------------
@@ -1357,5 +1376,750 @@ describe("content-based matching — the known limitation", () => {
       priorComments, currentAnchorIndex: idx, reviewerLogin: "gautham248", // no resolvePriorAnchor supplied
     });
     assert.equal(stillOpen.length, 1, "position fallback still finds SOMETHING at that line, does not throw");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 1b — compiler/type-checker diagnostics
+// ---------------------------------------------------------------------------
+//
+// The tsc/svelte-check fixtures in ./fixtures/ are REAL captured output —
+// generated once by actually running `tsc --noEmit` and `npx svelte-check`
+// against small throwaway broken projects (including the exact
+// `.on('message-received', ...)` error from the PR that motivated this
+// step), not hand-typed guesses at the format. They're committed rather
+// than regenerated per test run (unlike the git-diff fixtures above)
+// because installing svelte-check on every test run would make this suite
+// network-dependent and slow, which the rest of this repo's tests
+// deliberately avoid — but "real once, frozen after" is still real data,
+// not an assumption about what the tools print.
+
+describe("detectTypecheckCommand — command selection priority", () => {
+  test("prefers an explicit `typecheck` script", () => {
+    const result = detectTypecheckCommand({ scripts: { typecheck: "tsc --noEmit" }, hasTsconfig: true });
+    assert.deepEqual(result.command, ["npm", "run", "typecheck"]);
+  });
+
+  test("prefers `typecheck` over the ambiguous `check` when both are present", () => {
+    const result = detectTypecheckCommand({ scripts: { check: "eslint .", typecheck: "tsc --noEmit" }, hasTsconfig: true });
+    assert.deepEqual(result.command, ["npm", "run", "typecheck"]);
+  });
+
+  test("falls back to `type-check` (hyphenated) when `typecheck` is absent", () => {
+    const result = detectTypecheckCommand({ scripts: { "type-check": "tsc --noEmit" }, hasTsconfig: true });
+    assert.deepEqual(result.command, ["npm", "run", "type-check"]);
+  });
+
+  test("falls back to `check` (SvelteKit convention) when neither typecheck name is present", () => {
+    const result = detectTypecheckCommand({ scripts: { check: "svelte-check --tsconfig ./tsconfig.json" }, hasTsconfig: true });
+    assert.deepEqual(result.command, ["npm", "run", "check"]);
+  });
+
+  test("falls back to bare tsc when no script matches but tsconfig.json exists", () => {
+    const result = detectTypecheckCommand({ scripts: { build: "vite build" }, hasTsconfig: true });
+    assert.deepEqual(result.command, ["npx", "tsc", "--noEmit"]);
+  });
+
+  test("returns null (not a guessed command) when neither a script nor tsconfig exists", () => {
+    assert.equal(detectTypecheckCommand({ scripts: {}, hasTsconfig: false }), null);
+  });
+
+  test("ignores an empty-string script value rather than treating it as present", () => {
+    const result = detectTypecheckCommand({ scripts: { check: "   " }, hasTsconfig: false });
+    assert.equal(result, null);
+  });
+});
+
+describe("parseTscDiagnostics — real tsc --noEmit output", () => {
+  const raw = fs.readFileSync(path.join(HERE, "fixtures", "tsc-real-output.txt"), "utf8");
+
+  test("parses both real diagnostics from the fixture", () => {
+    const diags = parseTscDiagnostics(raw);
+    assert.equal(diags.length, 2);
+  });
+
+  test("extracts file, line, column, code, and message correctly", () => {
+    const diags = parseTscDiagnostics(raw);
+    assert.deepEqual(diags[0], {
+      file: "bad.ts",
+      line: 3,
+      column: 4,
+      severity: "error",
+      code: "TS2345",
+      message: `Argument of type '"message-received"' is not assignable to parameter of type 'keyof Events'.`,
+      tool: "tsc",
+    });
+  });
+
+  test("ignores non-diagnostic lines without throwing", () => {
+    const diags = parseTscDiagnostics("Compiling...\n\n" + raw + "\nDone.");
+    assert.equal(diags.length, 2);
+  });
+
+  test("returns [] for empty or non-diagnostic input", () => {
+    assert.deepEqual(parseTscDiagnostics(""), []);
+    assert.deepEqual(parseTscDiagnostics("no errors found"), []);
+  });
+});
+
+describe("parseSvelteCheckDiagnostics — real svelte-check output", () => {
+  const raw = fs.readFileSync(path.join(HERE, "fixtures", "svelte-check-real-output.txt"), "utf8");
+
+  test("parses all 3 real diagnostics from a multi-file, multi-diagnostic run", () => {
+    const diags = parseSvelteCheckDiagnostics(raw, "/tmp/svelte-check-smoke/");
+    assert.equal(diags.length, 3);
+  });
+
+  test("strips the cwd prefix down to a repo-relative path", () => {
+    const diags = parseSvelteCheckDiagnostics(raw, "/tmp/svelte-check-smoke/");
+    assert.equal(diags[0].file, "src/Bad.svelte");
+    assert.ok(!diags[0].file.startsWith("/"));
+  });
+
+  test("extracts line, column, and message for each diagnostic in file order", () => {
+    const diags = parseSvelteCheckDiagnostics(raw, "/tmp/svelte-check-smoke/");
+    assert.equal(diags[0].line, 7);
+    assert.equal(diags[0].column, 8);
+    assert.match(diags[0].message, /message-received/);
+    assert.equal(diags[1].file, "src/Bad2.svelte");
+    assert.equal(diags[1].line, 2);
+    assert.equal(diags[2].file, "src/Bad2.svelte");
+    assert.equal(diags[2].line, 3);
+  });
+
+  test("does not double-count a source line that happens to look like a header", () => {
+    // Bad2.svelte's diagnostic block includes '<script lang="ts">' as
+    // trailing context, which is NOT itself a valid `path:line:col` header
+    // (no numeric line:col) -- confirms the parser doesn't misfire on it.
+    const diags = parseSvelteCheckDiagnostics(raw, "/tmp/svelte-check-smoke/");
+    assert.equal(diags.length, 3);
+  });
+
+  test("returns [] for output with zero errors", () => {
+    const clean = "Loading svelte-check in workspace: /x\nGetting Svelte diagnostics...\n\n====================================\nsvelte-check found 0 errors and 0 warnings in 3 files\n";
+    assert.deepEqual(parseSvelteCheckDiagnostics(clean, "/x"), []);
+  });
+});
+
+describe("classifyDiagnosticsAgainstDiff — introduced vs pre-existing", () => {
+  function diffWithAddedLine() {
+    return [
+      "diff --git a/src/Bad.svelte b/src/Bad.svelte",
+      "new file mode 100644",
+      "index 0000000..1111111",
+      "--- /dev/null",
+      "+++ b/src/Bad.svelte",
+      "@@ -0,0 +1,3 @@",
+      "+<script lang=\"ts\">",
+      "+  const x = 1;",
+      "+</script>",
+      "",
+    ].join("\n");
+  }
+
+  test("a diagnostic on a line the diff added is 'introduced'", () => {
+    const anchorIndex = buildAnchorIndex(parseUnifiedDiff(diffWithAddedLine()));
+    const { introduced, preExisting } = classifyDiagnosticsAgainstDiff(
+      [{ file: "src/Bad.svelte", line: 2, severity: "error", message: "x" }],
+      anchorIndex
+    );
+    assert.equal(introduced.length, 1);
+    assert.equal(preExisting.length, 0);
+  });
+
+  test("a diagnostic in a completely untouched file is 'pre-existing'", () => {
+    const anchorIndex = buildAnchorIndex(parseUnifiedDiff(diffWithAddedLine()));
+    const { introduced, preExisting } = classifyDiagnosticsAgainstDiff(
+      [{ file: "src/NeverTouched.ts", line: 99, severity: "error", message: "x" }],
+      anchorIndex
+    );
+    assert.equal(introduced.length, 0);
+    assert.equal(preExisting.length, 1);
+  });
+
+  test("a diagnostic on a CONTEXT line in a changed file is still 'pre-existing', not 'introduced'", () => {
+    const diff = [
+      "diff --git a/src/File.ts b/src/File.ts",
+      "index 1111111..2222222 100644",
+      "--- a/src/File.ts",
+      "+++ b/src/File.ts",
+      "@@ -1,3 +1,4 @@",
+      " const untouched = 1;",
+      "+const added = 2;",
+      " const alsoUntouched = 3;",
+      "",
+    ].join("\n");
+    const anchorIndex = buildAnchorIndex(parseUnifiedDiff(diff));
+    const { introduced, preExisting } = classifyDiagnosticsAgainstDiff(
+      [{ file: "src/File.ts", line: 1, severity: "error", message: "on a context line, not an added one" }],
+      anchorIndex
+    );
+    assert.equal(introduced.length, 0, "a context line the diff merely passed through is not this PR's fault");
+    assert.equal(preExisting.length, 1);
+  });
+
+  test("warnings are excluded entirely, from both buckets", () => {
+    const anchorIndex = buildAnchorIndex(parseUnifiedDiff(diffWithAddedLine()));
+    const { introduced, preExisting } = classifyDiagnosticsAgainstDiff(
+      [{ file: "src/Bad.svelte", line: 2, severity: "warning", message: "just a warning" }],
+      anchorIndex
+    );
+    assert.equal(introduced.length, 0);
+    assert.equal(preExisting.length, 0);
+  });
+});
+
+describe("compilerDiagnosticToFinding — shape and real validateFinding pass", () => {
+  test("produces a finding that passes validateFinding unchanged, no new validation path needed", () => {
+    const diff = [
+      "diff --git a/src/Bad.svelte b/src/Bad.svelte",
+      "new file mode 100644",
+      "index 0000000..1111111",
+      "--- /dev/null",
+      "+++ b/src/Bad.svelte",
+      "@@ -0,0 +1,1 @@",
+      "+e.on('message-received', () => {});",
+      "",
+    ].join("\n");
+    const anchorIndex = buildAnchorIndex(parseUnifiedDiff(diff));
+    const anchor = anchorIndex.get("src/Bad.svelte", 1, "RIGHT");
+    const finding = compilerDiagnosticToFinding(
+      { file: "src/Bad.svelte", line: 1, tool: "svelte-check", code: undefined, message: "not assignable" },
+      anchor.content
+    );
+    const result = validateFinding(finding, anchorIndex);
+    assert.equal(result.ok, true, JSON.stringify(result.errors));
+  });
+
+  test("always confidence 1 and severity blocker — a compiler error is not an inference", () => {
+    const finding = compilerDiagnosticToFinding(
+      { file: "x.ts", line: 1, tool: "tsc", code: "TS2345", message: "m" },
+      "some line"
+    );
+    assert.equal(finding.confidence, 1);
+    assert.equal(finding.severity, "blocker");
+    assert.equal(finding.lens, "compiler");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sibling-PR / general-comment context
+// ---------------------------------------------------------------------------
+
+describe("extractSiblingPrRefs — same-org PR links in comment text", () => {
+  test("finds a same-org, same-repo PR link", () => {
+    const refs = extractSiblingPrRefs(
+      ["Refer comments in Lawyerup: https://github.com/10xMinds/fluffy-memory/pull/17"],
+      { owner: "10xMinds", repo: "fluffy-memory", excludeNumber: 21 }
+    );
+    assert.equal(refs.length, 1);
+    assert.deepEqual(refs[0], { owner: "10xMinds", repo: "fluffy-memory", number: 17, url: "https://github.com/10xMinds/fluffy-memory/pull/17" });
+  });
+
+  test("excludes a self-reference to the PR currently being reviewed", () => {
+    const refs = extractSiblingPrRefs(
+      ["see https://github.com/10xMinds/fluffy-memory/pull/21 for context"],
+      { owner: "10xMinds", repo: "fluffy-memory", excludeNumber: 21 }
+    );
+    assert.equal(refs.length, 0);
+  });
+
+  test("excludes a PR link from a different owner/org — scoped to same-org only, on purpose", () => {
+    const refs = extractSiblingPrRefs(
+      ["unrelated: https://github.com/other-org/other-repo/pull/5"],
+      { owner: "10xMinds", repo: "fluffy-memory", excludeNumber: 21 }
+    );
+    assert.equal(refs.length, 0);
+  });
+
+  test("excludes a PR link from the same owner but a different repo", () => {
+    const refs = extractSiblingPrRefs(
+      ["see https://github.com/10xMinds/some-other-repo/pull/5"],
+      { owner: "10xMinds", repo: "fluffy-memory", excludeNumber: 21 }
+    );
+    assert.equal(refs.length, 0);
+  });
+
+  test("dedupes the same PR referenced from two different comments", () => {
+    const refs = extractSiblingPrRefs(
+      [
+        "https://github.com/10xMinds/fluffy-memory/pull/17",
+        "as mentioned before, https://github.com/10xMinds/fluffy-memory/pull/17 again",
+      ],
+      { owner: "10xMinds", repo: "fluffy-memory", excludeNumber: 21 }
+    );
+    assert.equal(refs.length, 1);
+  });
+
+  test("handles no comments, empty comments, and non-string entries without throwing", () => {
+    assert.deepEqual(extractSiblingPrRefs([], { owner: "a", repo: "b" }), []);
+    assert.deepEqual(extractSiblingPrRefs([null, undefined, 42, ""], { owner: "a", repo: "b" }), []);
+  });
+});
+
+describe("renderSummary — pre-existing compile errors and sibling context", () => {
+  function baseArgs(over = {}) {
+    return {
+      findings: [],
+      lensReport: { selected: [], skipped: [], notApplicable: [] },
+      prMeta: { repo: "org/game", number: 42, changedFiles: 14 },
+      eventDecision: {},
+      ...over,
+    };
+  }
+
+  test("renders the full list of pre-existing compile errors, not just a count", () => {
+    const summary = renderSummary(
+      baseArgs({
+        preExistingCompileErrors: [
+          { file: "src/Other.ts", line: 12, message: "Property 'foo' does not exist on type 'Bar'." },
+          { file: "src/Another.ts", line: 5, message: "Cannot find name 'baz'." },
+        ],
+      })
+    );
+    assert.ok(summary.includes("Pre-existing compile errors"));
+    assert.ok(summary.includes("src/Other.ts:12"));
+    assert.ok(summary.includes("Property 'foo' does not exist"));
+    assert.ok(summary.includes("src/Another.ts:5"));
+  });
+
+  test("omits the pre-existing section entirely when there are none", () => {
+    const summary = renderSummary(baseArgs({ preExistingCompileErrors: [] }));
+    assert.ok(!summary.includes("Pre-existing compile errors"));
+  });
+
+  test("renders sibling-PR context as a transparency note", () => {
+    const summary = renderSummary(
+      baseArgs({
+        siblingContext: { generalCommentCount: 2, siblingPr: { owner: "10xMinds", repo: "fluffy-memory", number: 17 } },
+      })
+    );
+    assert.ok(summary.includes("Context considered"));
+    assert.ok(summary.includes("2 general PR comment(s)"));
+    assert.ok(summary.includes("10xMinds/fluffy-memory#17"));
+  });
+
+  test("omits the context note when there is nothing to report", () => {
+    const summary = renderSummary(baseArgs({ siblingContext: { generalCommentCount: 0, siblingPr: null } }));
+    assert.ok(!summary.includes("Context considered"));
+  });
+
+  test("renders completeness-gate counts when any category is non-zero", () => {
+    const summary = renderSummary(
+      baseArgs({ completenessChecks: { stateMutation: 2, identity: 1, resourceCleanup: 0 } })
+    );
+    assert.ok(summary.includes("Completeness gate"));
+    assert.ok(summary.includes("2 state-mutation"));
+    assert.ok(summary.includes("1 identity"));
+    assert.ok(summary.includes("0 resource-cleanup"));
+  });
+
+  test("omits the completeness-gate line when all counts are zero (nothing to prove ran)", () => {
+    const summary = renderSummary(
+      baseArgs({ completenessChecks: { stateMutation: 0, identity: 0, resourceCleanup: 0 } })
+    );
+    assert.ok(!summary.includes("Completeness gate"));
+  });
+
+  test("omits the completeness-gate line entirely when not passed at all", () => {
+    const summary = renderSummary(baseArgs({}));
+    assert.ok(!summary.includes("Completeness gate"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Step 4c — mandatory completeness gate
+// ---------------------------------------------------------------------------
+//
+// The two "real bug" tests below use the EXACT lines from the actual
+// investigation that motivated this gate (traced by hand, over several
+// turns, against the real fluffy-memory/emoji repo) -- not synthesized
+// examples. If these ever stop passing, the gate has regressed on the
+// precise cases it exists to catch.
+
+describe("findCompletenessCandidates — trigger regexes", () => {
+  test("REAL BUG 1: flags the exact line that hid the lost-points bug", () => {
+    const diff = [
+      "diff --git a/gameController.ts b/gameController.ts",
+      "index 1111111..2222222 100644",
+      "--- a/gameController.ts",
+      "+++ b/gameController.ts",
+      "@@ -320,10 +320,10 @@",
+      "+\t\tconst results = Array.from(game.currentTurnGuesses?.values() || []).map((guess) => {",
+      "+\t\t\treturn { playerId: guess.playerId, score: guess.score };",
+      "+\t\t});",
+      "",
+    ].join("\n");
+    const candidates = findCompletenessCandidates(parseUnifiedDiff(diff));
+    assert.equal(candidates.stateMutation.length, 1);
+    assert.equal(candidates.stateMutation[0].file, "gameController.ts");
+    assert.match(candidates.stateMutation[0].text, /guess\.score/);
+  });
+
+  test("REAL BUG 2: flags the exact line that hid the clientId impersonation bug", () => {
+    const diff = [
+      "diff --git a/socketSetup.ts b/socketSetup.ts",
+      "index 3333333..4444444 100644",
+      "--- a/socketSetup.ts",
+      "+++ b/socketSetup.ts",
+      "@@ -160,6 +160,6 @@",
+      "+\t\t\tfor (const [sid, player] of room.members.entries()) {",
+      "+\t\t\t\tif (player.clientId === incomingClientId) {",
+      "+\t\t\t\t\texistingPlayer = player;",
+      "+\t\t\t\t}",
+      "+\t\t\t}",
+      "",
+    ].join("\n");
+    const candidates = findCompletenessCandidates(parseUnifiedDiff(diff));
+    assert.equal(candidates.identity.length, 1);
+    assert.equal(candidates.identity[0].file, "socketSetup.ts");
+    assert.match(candidates.identity[0].text, /clientId/);
+  });
+
+  test("flags a setTimeout with no visible clearTimeout as a resource-create candidate", () => {
+    const diff = [
+      "diff --git a/x.ts b/x.ts",
+      "index 1111111..2222222 100644",
+      "--- a/x.ts",
+      "+++ b/x.ts",
+      "@@ -1,3 +1,3 @@",
+      "+function schedule() {",
+      "+\tsetTimeout(() => { doThing(); }, 1000);",
+      "+}",
+      "",
+    ].join("\n");
+    const candidates = findCompletenessCandidates(parseUnifiedDiff(diff));
+    assert.equal(candidates.resourceCreate.length, 1);
+  });
+
+  test("a diff with none of the three keywords produces three empty arrays — genuine no-op", () => {
+    const diff = [
+      "diff --git a/x.ts b/x.ts",
+      "index 1111111..2222222 100644",
+      "--- a/x.ts",
+      "+++ b/x.ts",
+      "@@ -1,2 +1,2 @@",
+      "+export function add(a: number, b: number) {",
+      "+\treturn a + b;",
+      "}",
+      "",
+    ].join("\n");
+    const candidates = findCompletenessCandidates(parseUnifiedDiff(diff));
+    assert.equal(candidates.stateMutation.length, 0);
+    assert.equal(candidates.identity.length, 0);
+    assert.equal(candidates.resourceCreate.length, 0);
+  });
+
+  test("only scans ADDED lines, not removed or context lines", () => {
+    const diff = [
+      "diff --git a/x.ts b/x.ts",
+      "index 1111111..2222222 100644",
+      "--- a/x.ts",
+      "+++ b/x.ts",
+      "@@ -1,3 +1,3 @@",
+      " const totalScore = 0; // context line, unchanged",
+      "-const oldScore = balance; // removed line",
+      "+const label = 'unrelated'; // added line, no keyword",
+      "",
+    ].join("\n");
+    const candidates = findCompletenessCandidates(parseUnifiedDiff(diff));
+    assert.equal(candidates.stateMutation.length, 0);
+  });
+
+  test("handles an empty file list without throwing", () => {
+    assert.deepEqual(findCompletenessCandidates([]), { stateMutation: [], identity: [], resourceCreate: [] });
+    assert.deepEqual(findCompletenessCandidates(undefined), { stateMutation: [], identity: [], resourceCreate: [] });
+  });
+});
+
+describe("keyword regex constants — sanity checks", () => {
+  test("STATE_MUTATION_KEYWORD_RE matches common scoring/economy terms", () => {
+    for (const w of ["score", "totalScore", "balance", "points", "credits", "amount"]) {
+      assert.ok(STATE_MUTATION_KEYWORD_RE.test(`const x = ${w};`), `expected match for ${w}`);
+    }
+  });
+
+  test("IDENTITY_KEYWORD_RE matches common identity/auth terms", () => {
+    for (const w of ["clientId", "sessionId", "userId", "adminId", "isAdmin", "token"]) {
+      assert.ok(IDENTITY_KEYWORD_RE.test(`const x = ${w};`), `expected match for ${w}`);
+    }
+  });
+
+  test("RESOURCE_CREATE_RE matches timer and listener creation, not their cleanup counterparts", () => {
+    assert.ok(RESOURCE_CREATE_RE.test("setTimeout(fn, 100)"));
+    assert.ok(RESOURCE_CREATE_RE.test("socket.on('event', fn)"));
+    assert.ok(!RESOURCE_CREATE_RE.test("clearTimeout(handle)"));
+  });
+});
+
+describe("expandCandidatesWithSubsystems — architecture-context as an active trigger", () => {
+  test("adds a subsystem's anchor_files as state-mutation candidates when its summary mentions scoring", () => {
+    const base = { stateMutation: [], identity: [], resourceCreate: [] };
+    const subsystems = {
+      "state-sync": {
+        summary: "Server-authoritative scoring and state broadcast to clients.",
+        anchor_files: ["net/sync.ts", "server/rooms/GameRoom.ts"],
+      },
+    };
+    const result = expandCandidatesWithSubsystems(base, subsystems);
+    assert.equal(result.stateMutation.length, 2);
+    assert.equal(result.stateMutation[0].line, null);
+    assert.match(result.stateMutation[0].text, /state-sync/);
+  });
+
+  test("does not add a subsystem to identity candidates if its summary has no identity language", () => {
+    const base = { stateMutation: [], identity: [], resourceCreate: [] };
+    const subsystems = {
+      ui: { summary: "Renders the emoji picker and chat panel.", anchor_files: ["components/EmojiPicker.svelte"] },
+    };
+    const result = expandCandidatesWithSubsystems(base, subsystems);
+    assert.equal(result.identity.length, 0);
+    assert.equal(result.stateMutation.length, 0);
+  });
+
+  test("preserves original line-level candidates alongside subsystem-derived ones", () => {
+    const base = { stateMutation: [{ file: "a.ts", line: 10, text: "score" }], identity: [], resourceCreate: [] };
+    const subsystems = { s: { summary: "scoring logic", anchor_files: ["b.ts"] } };
+    const result = expandCandidatesWithSubsystems(base, subsystems);
+    assert.equal(result.stateMutation.length, 2);
+  });
+
+  test("handles no subsystems (Step 2b didn't run) without throwing", () => {
+    const base = { stateMutation: [], identity: [], resourceCreate: [] };
+    assert.deepEqual(expandCandidatesWithSubsystems(base, null), base);
+    assert.deepEqual(expandCandidatesWithSubsystems(base, undefined), base);
+  });
+});
+
+function makeCoverageFinding(over = {}) {
+  return {
+    type: "coverage",
+    subsystem: "state-sync",
+    rationale: "GameRoom state mutations have no corresponding broadcast path in this diff.",
+    confidence: 0.8,
+    ...over,
+  };
+}
+
+describe("shouldRunArchitectCheck — trigger thresholds", () => {
+  test("does not trigger under both thresholds", () => {
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: 3, matchedSubsystemCount: 1 }),
+      false
+    );
+  });
+
+  test("triggers at exactly the file-count threshold (10)", () => {
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: DEFAULT_ARCHITECT_FILE_THRESHOLD, matchedSubsystemCount: 0 }),
+      true
+    );
+  });
+
+  test("does not trigger one below the file-count threshold", () => {
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: DEFAULT_ARCHITECT_FILE_THRESHOLD - 1, matchedSubsystemCount: 0 }),
+      false
+    );
+  });
+
+  test("triggers at exactly the subsystem-span threshold (3), even with few files", () => {
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: 2, matchedSubsystemCount: DEFAULT_ARCHITECT_SUBSYSTEM_THRESHOLD }),
+      true
+    );
+  });
+
+  test("does not trigger one below the subsystem-span threshold", () => {
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: 2, matchedSubsystemCount: DEFAULT_ARCHITECT_SUBSYSTEM_THRESHOLD - 1 }),
+      false
+    );
+  });
+
+  test("either threshold alone is sufficient (OR, not AND)", () => {
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: 50, matchedSubsystemCount: 0 }),
+      true,
+      "large file count alone should trigger even with zero matched subsystems"
+    );
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: 0, matchedSubsystemCount: 5 }),
+      true,
+      "large subsystem span alone should trigger even with zero changed files"
+    );
+  });
+
+  test("custom thresholds override the defaults", () => {
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: 5, matchedSubsystemCount: 0, fileThreshold: 5 }),
+      true
+    );
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: 5, matchedSubsystemCount: 0, fileThreshold: 6 }),
+      false
+    );
+  });
+
+  test("non-numeric inputs are treated as 0, never throw", () => {
+    assert.equal(
+      shouldRunArchitectCheck({ changedFilesCount: undefined, matchedSubsystemCount: NaN }),
+      false
+    );
+  });
+});
+
+describe("validateCoverageFinding — schema for non-line findings", () => {
+  test("accepts a well-formed coverage finding", () => {
+    const { ok, errors } = validateCoverageFinding(makeCoverageFinding());
+    assert.equal(ok, true, JSON.stringify(errors));
+  });
+
+  test("rejects wrong type", () => {
+    const { ok, errors } = validateCoverageFinding(makeCoverageFinding({ type: "blocker" }));
+    assert.equal(ok, false);
+    assert.ok(errors.some((e) => e.includes("type")));
+  });
+
+  test("rejects missing subsystem", () => {
+    const { ok, errors } = validateCoverageFinding(makeCoverageFinding({ subsystem: "" }));
+    assert.equal(ok, false);
+    assert.ok(errors.some((e) => e.includes("subsystem")));
+  });
+
+  test("rejects a rationale that's too short to explain anything", () => {
+    const { ok, errors } = validateCoverageFinding(makeCoverageFinding({ rationale: "missing" }));
+    assert.equal(ok, false);
+    assert.ok(errors.some((e) => e.includes("rationale")));
+  });
+
+  test("rejects out-of-range confidence", () => {
+    assert.equal(validateCoverageFinding(makeCoverageFinding({ confidence: 1.5 })).ok, false);
+    assert.equal(validateCoverageFinding(makeCoverageFinding({ confidence: -0.1 })).ok, false);
+  });
+
+  test("does NOT require file/line/evidence — the whole point of this schema", () => {
+    const f = makeCoverageFinding();
+    assert.equal(f.file, undefined);
+    assert.equal(f.line, undefined);
+    assert.equal(f.evidence, undefined);
+    assert.equal(validateCoverageFinding(f).ok, true);
+  });
+
+  test("handles null/undefined input without throwing", () => {
+    assert.equal(validateCoverageFinding(null).ok, false);
+    assert.equal(validateCoverageFinding(undefined).ok, false);
+  });
+});
+
+describe("dedupeCoverageFindings — one entry per subsystem", () => {
+  test("collapses two findings for the same subsystem into one", () => {
+    const result = dedupeCoverageFindings([
+      makeCoverageFinding({ subsystem: "state-sync", confidence: 0.6 }),
+      makeCoverageFinding({ subsystem: "state-sync", confidence: 0.9, rationale: "A stronger, more specific rationale here." }),
+    ]);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].confidence, 0.9);
+  });
+
+  test("keeps distinct subsystems separate", () => {
+    const result = dedupeCoverageFindings([
+      makeCoverageFinding({ subsystem: "state-sync" }),
+      makeCoverageFinding({ subsystem: "matchmaking" }),
+    ]);
+    assert.equal(result.length, 2);
+  });
+
+  test("subsystem matching is case-insensitive and whitespace-trimmed", () => {
+    const result = dedupeCoverageFindings([
+      makeCoverageFinding({ subsystem: "State-Sync", confidence: 0.5 }),
+      makeCoverageFinding({ subsystem: "  state-sync  ", confidence: 0.7 }),
+    ]);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].confidence, 0.7);
+  });
+
+  test("empty input returns empty output", () => {
+    assert.deepEqual(dedupeCoverageFindings([]), []);
+  });
+});
+
+describe("renderSummary — architecture review section", () => {
+  function baseArgs(over = {}) {
+    return {
+      findings: [],
+      lensReport: { selected: [], skipped: [], notApplicable: [] },
+      prMeta: { repo: "org/game", number: 42, changedFiles: 14 },
+      eventDecision: {},
+      ...over,
+    };
+  }
+
+  test("omits the section entirely when architectureReview is not passed", () => {
+    const summary = renderSummary(baseArgs());
+    assert.ok(!summary.includes("### Architecture review"));
+  });
+
+  test("renders narrative, touched subsystems, and coverage findings", () => {
+    const summary = renderSummary(
+      baseArgs({
+        architectureReview: {
+          narrative: "This PR adds game-room logic but does not touch state-sync.",
+          subsystemsTouched: ["game-logic", "matchmaking"],
+          coverageFindings: [makeCoverageFinding()],
+          heldCoverageCount: 0,
+        },
+      })
+    );
+    assert.ok(summary.includes("### Architecture review"));
+    assert.ok(summary.includes("This PR adds game-room logic"));
+    assert.ok(summary.includes("**Subsystems touched:** game-logic, matchmaking"));
+    assert.ok(summary.includes("**state-sync**"));
+    assert.ok(summary.includes("80% confidence"));
+  });
+
+  test("says explicitly when no coverage gaps were flagged, rather than an empty section", () => {
+    const summary = renderSummary(
+      baseArgs({
+        architectureReview: {
+          narrative: "Touches only the subsystems this kind of change would need.",
+          subsystemsTouched: ["state-sync"],
+          coverageFindings: [],
+          heldCoverageCount: 0,
+        },
+      })
+    );
+    assert.ok(summary.includes("No coverage gaps flagged"));
+  });
+
+  test("notes held-back low-confidence coverage findings without showing them", () => {
+    const summary = renderSummary(
+      baseArgs({
+        architectureReview: {
+          narrative: "n/a",
+          subsystemsTouched: [],
+          coverageFindings: [],
+          heldCoverageCount: 2,
+        },
+      })
+    );
+    assert.ok(summary.includes("2 low-confidence coverage observation(s) held back"));
+  });
+
+  test("architecture review section appears before the per-lens breakdown", () => {
+    const summary = renderSummary(
+      baseArgs({
+        lensReport: { selected: [{ skill: "coding-standards-backend", concern: "API conventions" }], skipped: [], notApplicable: [] },
+        architectureReview: {
+          narrative: "n/a",
+          subsystemsTouched: [],
+          coverageFindings: [],
+          heldCoverageCount: 0,
+        },
+      })
+    );
+    const archIdx = summary.indexOf("### Architecture review");
+    const lensIdx = summary.indexOf("### Lenses applied");
+    assert.ok(archIdx !== -1 && lensIdx !== -1 && archIdx < lensIdx);
   });
 });

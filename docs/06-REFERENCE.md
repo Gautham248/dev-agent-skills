@@ -444,6 +444,9 @@ Four steps in order:
 3. Present plan: what you'll do + what you won't + what done looks like. Hard stop.
 4. Act only after explicit yes.
 
+### Rule 3b — Database mutations need their own confirmation
+A CREATE/UPDATE/DELETE/TRUNCATE/migration against a database is never covered by an earlier confirmation to write or run a script — it needs its own explicit yes, every time, even in a dev/local/staging environment. State the specific mutation (table, operation, rough scope, which database by name) before running it. Reads are not gated by this rule.
+
 **There is no standalone Rule 4.** Recording real edge cases after finishing is governed entirely by the injected self-improvement protocol (see `SKILL.md` structure above and `config/SELF-IMPROVEMENT-PROTOCOL.md`), not by a standing rule in `AGENT-STANDING-RULES.md` — unlike clarification, which is deliberately enforced in both places. Worth knowing so you edit the right file if this behavior ever needs to change.
 
 ---

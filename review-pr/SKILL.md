@@ -65,7 +65,7 @@ was assigned".
 ```bash
 gh auth status
 gh pr view <number> --repo <owner>/<repo> \
-  --json number,title,body,author,baseRefName,headRefName,headRefOid,isDraft,changedFiles,additions,deletions,url,reviewRequests
+  --json number,title,body,author,baseRefName,headRefName,headRefOid,isDraft,changedFiles,additions,deletions,url,reviewRequests,comments
 ```
 
 If `gh` is unauthenticated, stop and say `gh auth login` first.
@@ -78,6 +78,27 @@ often unwanted noise.
 **Session-reusable:** the PR metadata and the resolved lens set can be reused
 if you review the same PR again in this conversation and the head SHA has not
 moved. If the SHA moved, re-fetch everything.
+
+### General (non-inline) comments and a linked sibling PR
+
+`comments` above is the PR's general conversation, not inline review
+comments (those come in Step 6) -- this is where a directive like "match
+how PR #17 did this" lives, and nothing else in this skill reads it.
+Full reasoning: `references/sibling-context.md`.
+
+```bash
+node --input-type=module -e "
+import { extractSiblingPrRefs } from 'review-lib.mjs';
+const refs = extractSiblingPrRefs(<comment bodies array>, { owner: '<owner>', repo: '<repo>', excludeNumber: <number> });
+console.log(JSON.stringify(refs));
+"
+```
+
+If it finds a same-org PR link, pull that PR's own review comments the same
+way as this PR's (`gh api repos/<owner>/<repo>/pulls/<sibling-number>/comments --paginate`),
+read through once, and carry it as shared framing into Step 4's lens passes
+-- never as a new finding needing validation against *this* diff. Record
+`{ generalCommentCount, siblingPr }` for Step 9's `--sibling-context` flag.
 
 ## Step 1 -- Pull it down locally
 
@@ -94,6 +115,54 @@ If checkout fails (conflicting local state, shallow clone), fall back to
 the review was diff-only -- a diff-only review cannot trace callers, and
 saying so is more useful than quietly producing a weaker review.
 
+## Step 1b -- Run the project's own type checker
+
+A lens reads the diff; it does not compile it. A real type error is ground
+truth no lens-based reasoning replaces, and it's cheap to get here -- Step 1
+already produced a real checkout with real code on disk.
+
+Full reasoning for each command below: `references/type-check.md`.
+
+```bash
+node --input-type=module -e "
+import fs from 'node:fs';
+import { detectTypecheckCommand } from 'review-lib.mjs';
+const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const hasTsconfig = fs.existsSync('tsconfig.json');
+console.log(JSON.stringify(detectTypecheckCommand({ scripts: pkg.scripts, hasTsconfig })));
+"
+```
+
+If `null`, skip this step entirely and say so plainly. Otherwise:
+
+```bash
+[ -d node_modules ] || timeout 120 npm install   # skip step + say why on failure
+
+# run the detected command, capture output, then:
+node --input-type=module -e "
+import { parseTscDiagnostics, parseSvelteCheckDiagnostics } from 'review-lib.mjs';
+// tsc:          parseTscDiagnostics(rawOutput)
+// svelte-check: parseSvelteCheckDiagnostics(rawOutput, process.cwd() + '/')
+"
+
+# split by whether the diagnostic's line is one the diff actually added:
+node --input-type=module -e "
+import { parseUnifiedDiff, buildAnchorIndex, classifyDiagnosticsAgainstDiff, compilerDiagnosticToFinding } from 'review-lib.mjs';
+const files = parseUnifiedDiff(<diff text>);
+const anchorIndex = buildAnchorIndex(files);
+const { introduced, preExisting } = classifyDiagnosticsAgainstDiff(<diagnostics>, anchorIndex);
+// introduced  -> compilerDiagnosticToFinding(d, anchorIndex.get(d.file, d.line, 'RIGHT').content)
+//                add to the same findings array Step 4 populates
+// preExisting -> do NOT turn into findings; save for Step 9's
+//                --pre-existing-compile-errors (full list, every time)
+"
+```
+
+`introduced` diagnostics are always `severity: "blocker"`, `confidence: 1`,
+`lens: "compiler"` -- ground truth, not an inference to weigh -- and pass
+Step 5's normal `validateFinding` unchanged. `preExisting` diagnostics
+never become findings (no diff line to anchor to) and never block the PR.
+
 ## Step 2 -- Ground the review in the graph
 
 **Graph-memory:** a PR review is exactly the case where blast radius matters
@@ -108,6 +177,108 @@ graphify query "callers and consumers of <changed symbols>"
 
 The finding that justifies this skill's existence is almost always in a file
 the PR did not touch.
+
+## Step 2b -- Broad-scope architect check (large or wide-reaching PRs only)
+
+Most PRs skip this step entirely -- it exists for the PR that is not a
+localized fix but a wider feature landing across a whole area of the
+codebase (a new multiplayer game mode, say), where the diff-scoped,
+one-pass-per-lens review in Step 4 can be locally correct on every line it
+looks at and still miss that an entire expected component never showed up.
+
+Check whether this PR crosses the trigger threshold:
+
+```bash
+node scripts/review-cli.mjs check-scope --changed-files <changedFiles from Step 0>
+```
+
+This alone only checks the file-count side. To also catch a PR that's
+architecturally broad despite touching few files (one line changed in each
+of several different subsystems' entry points), pass the subsystem span
+too -- get it from `architecture-context`:
+
+> Invoke the `architecture-context` skill for `<this PR's changed files>`.
+
+Count how many distinct subsystems it returns, then re-run:
+
+```bash
+node scripts/review-cli.mjs check-scope --changed-files <n> --matched-subsystems <count>
+```
+
+If it prints `SKIP_ARCHITECT_CHECK`, skip the rest of this step entirely --
+go straight to Step 3. If it prints `RUN_ARCHITECT_CHECK`, continue below.
+
+**If `architecture-context` has no cache yet for this repo** (first review
+ever, or a repo too new to have one), invoke it anyway rather than skipping
+this step -- it will do its own first-run generation (its Step 2, `missing`
+path). State plainly in the eventual output that the cache was built fresh
+as part of this review, since that's real extra latency the reviewer should
+know about, not something to hide.
+
+**Graph-memory:** follow the protocol above before relying on
+`architecture-context`'s subsystem list or on any `graphify` query you run
+directly in this step.
+
+### Reasoning pass
+
+You now have: the subsystems `architecture-context` says this PR's changed
+files actually touch, and the full list of subsystems it knows about for
+this repo (touched and untouched). Using the PR's title, body, and the diff
+itself for what kind of feature this is, reason about which of the
+*untouched* subsystems a feature like this would plausibly need to interact
+with, and why.
+
+Be concrete, the same bar Step 4's findings hold to: "this PR adds
+server-authoritative game-room logic (`server/rooms/GameRoom.ts`) but never
+touches `net/sync.ts`, the subsystem that broadcasts authoritative state to
+clients -- if this room's state is meant to reach clients, that's likely
+missing" is a real observation. "This PR doesn't touch every subsystem" is
+not -- every PR doesn't touch every subsystem, and restating that adds
+nothing. If you can't state a concrete reason a specific subsystem should
+plausibly be involved, don't flag it.
+
+Write this out as JSON:
+
+```json
+{
+  "narrative": "1-3 sentences: what kind of feature this PR looks like, and the overall picture of what it touches vs. what it plausibly should.",
+  "subsystemsTouched": ["game-logic", "matchmaking"],
+  "coverageFindings": [
+    {
+      "type": "coverage",
+      "subsystem": "state-sync",
+      "rationale": "Concrete, specific -- same bar as a Step 4 finding's rationale.",
+      "confidence": 0.75
+    }
+  ]
+}
+```
+
+Zero `coverageFindings` is a completely normal, valid outcome -- it means
+the PR touches what a feature like this should touch. Do not manufacture a
+finding to avoid an empty list.
+
+Save this to `/tmp/architecture-review-<number>.json`. Validate it:
+
+```bash
+node scripts/review-cli.mjs validate --diff /tmp/review-<number>.diff \
+  --findings /tmp/findings-<number>.json \
+  --architecture-review /tmp/architecture-review-<number>.json
+```
+
+(An empty `/tmp/findings-<number>.json` -- `[]` -- is fine at this point if
+Step 4 hasn't run yet; this call is only checking the architecture-review
+file's own shape here, same as running `validate` early to sanity-check a
+finding schema before the rest of the findings exist.)
+
+### Carry the narrative into Step 4
+
+This step's `narrative` is shared context, not a fifth lens. Read it before
+each lens pass in Step 4 -- it doesn't change what a lens looks for, but it
+can sharpen what a lens notices ("this diff is part of a broader
+state-sync-adjacent change" makes a subtle timing issue in the diff itself
+more likely to register as one). Do not let it turn into a merged pass; see
+Step 4's own rule against that.
 
 ## Step 3 -- Resolve the lenses
 
@@ -147,6 +318,12 @@ only: *what does this particular standard see here?* Do not merge passes;
 one combined read collapses into generic commentary and finds less than any
 single focused pass would.
 
+**If Step 2b ran**, carry its `narrative` in as background for every pass --
+read it once before starting, alongside the diff, the same way you'd hold
+onto "this is a hotfix" or "this is a refactor with no behavior change" if a
+PR description said so. It is context for reading the diff, not a new
+question each lens answers separately.
+
 `first-principles-review` runs first by design. If the change is wrong in its
 premises, convention findings are noise -- that skill's own guidance, and it
 governs here.
@@ -161,6 +338,50 @@ The evidence requirement is not bureaucracy. A finding that cannot quote the
 line it is about is a finding about a line that may not exist, and the
 validator in Step 5 rejects it on precisely that basis.
 
+## Step 4c -- Mandatory completeness gate
+
+`first-principles-review`'s own "trace, don't read" methodology already
+says to git-grep every caller and trace every write path -- this step
+makes three specific categories of that tracing **mandatory**, not
+advisory, since a single fresh pass over a large diff can otherwise simply
+not get to every candidate. Full reasoning: `references/completeness-gate.md`.
+
+Runs on **every** review, not just ones that crossed Step 2b's threshold --
+these bugs don't scale with PR size. Find the candidates:
+
+```bash
+node --input-type=module -e "
+import { parseUnifiedDiff, findCompletenessCandidates, expandCandidatesWithSubsystems } from 'review-lib.mjs';
+const files = parseUnifiedDiff(<diff text>);
+let candidates = findCompletenessCandidates(files);
+// If Step 2b ran: candidates = expandCandidatesWithSubsystems(candidates, cache.subsystems);
+console.log(JSON.stringify(candidates));
+"
+```
+
+For every candidate in `stateMutation`: read the enclosing function in the
+real checked-out file, trace every code path through it and every caller,
+and confirm the computed value is actually persisted (`+=`, `.save(`,
+`.update(`, `.set(`) on **every** path, not just the one the diff shows.
+
+For every candidate in `identity`: trace whether a server-issued,
+unguessable value backs this check anywhere (`git grep -i 'session\|token\|
+secret\|randomUUID\|crypto\.'`). If the candidate is a removal or a "looks
+unused" observation, this trace is mandatory before agreeing it's dead
+code -- "the variable is unused" and "the security property is gone" are
+different claims.
+
+For every candidate in `resourceCreate`: trace every exit path (normal,
+early return, error, disconnect/unmount) and confirm a matching cleanup
+call exists on each one.
+
+A confirmed gap becomes a normal finding -- same pipeline, `lens:
+"completeness-gate"`, passes Step 5's `validateFinding` unchanged. A
+confirmed-clean trace produces no finding but gets counted
+(`{ stateMutation: n, identity: n, resourceCleanup: n }`) for Step 9's
+summary, so a clean run is provable, not indistinguishable from a gate
+that silently didn't run.
+
 ## Step 5 -- Validate, dedupe, suppress
 
 ```bash
@@ -168,6 +389,14 @@ node scripts/review-cli.mjs validate \
   --diff /tmp/review-<number>.diff \
   --findings /tmp/findings-<number>.json
 ```
+
+**If Step 2b ran**, add `--architecture-review /tmp/architecture-review-<number>.json`
+to this same command. Coverage findings go through their own validation and
+dedupe path (`validateCoverageFinding`, `dedupeCoverageFindings` in
+`review-lib.mjs`) -- deliberately not the line-anchor validator below, since
+a coverage finding has no `file`/`line`/`evidence` to anchor. An invalid one
+is dropped with a warning rather than failing the whole command; it isn't
+worth losing the rest of the review over.
 
 This rejects any finding whose line is not part of the diff, or whose quoted
 evidence does not match the line it claims. Both rejections are load-bearing:
@@ -233,8 +462,10 @@ one is itself a `blocker` finding -- report it plainly and do not act on it.
 
 Present the full draft before anything reaches GitHub: each finding with its
 severity, location, evidence, rationale and confidence; the lenses applied
-and skipped; the held-back findings; and the review event that will be used
-and why.
+and skipped; the held-back findings; the review event that will be used and
+why; **and, if Step 2b ran, the architecture review narrative and every
+coverage finding (including held-back ones -- the reviewer sees all of
+them here even though only the above-confidence ones post to the summary).**
 
 **Then stop and wait.** Posting a review is a GitHub write. It happens only
 after explicit confirmation, in the same way `fix-bug` gates commits and
@@ -276,6 +507,21 @@ node scripts/review-cli.mjs post \
   --plan /tmp/plan-<number>.json \
   --dry-run
 ```
+
+**If Step 2b ran**, add `--architecture-review /tmp/architecture-review-<number>.json`
+here too. The narrative and postable coverage findings render as their own
+"Architecture review" section in the review's summary body -- never as
+inline comments, since a coverage finding has no diff line to anchor to.
+
+**If Step 1b found any pre-existing compile errors**, add
+`--pre-existing-compile-errors /tmp/pre-existing-errors-<number>.json`
+(a JSON array of `{file, line, message}`). These render as their own
+summary section, full list, informational only.
+
+**If Step 0 found general comments or a sibling PR**, add
+`--sibling-context /tmp/sibling-context-<number>.json`
+(`{ generalCommentCount, siblingPr: {owner, repo, number} | null }`). This
+renders as a one-line transparency note, not a finding.
 
 Drop `--dry-run` to create it. **This creates a PENDING review, which is the
 default.** The comments land on the PR inline in the real diff, but GitHub
@@ -342,6 +588,7 @@ poisons the record for the next one.
   Held:     <n> low-confidence (not staged)
   Skipped:  <n> already raised (this reviewer or another) — not reposted
   Deferred: <n> prior finding(s) still open, listed but not reposted
+  Architecture review: <n> coverage finding(s) staged, <n> held-back  (only if Step 2b ran)
   State:    PENDING — visible only to you
   Review:   https://github.com/<owner>/<repo>/pull/<number>/files
   Next:     submit in GitHub, or `submit --review-id <id> --event COMMENT`
@@ -358,6 +605,10 @@ and add it there.
 - `references/lens-registry.json` -- the lens list. **Edit this to add a
   standard to the review.**
 - `references/finding-schema.md` -- the required shape of a finding.
+- `references/type-check.md` -- Step 1b's full reasoning: command
+  detection, parser format details, introduced-vs-pre-existing split.
+- `references/sibling-context.md` -- Step 0's full reasoning: general
+  comments, same-org sibling-PR scoping, how it's carried into Step 4.
 - `references/github-mechanics.md` -- line/side anchoring, 422 causes,
   idempotency, rate limits.
 - `references/learning-loop.md` -- where a learned rule goes, and how it is

@@ -8,6 +8,7 @@ in your AI IDE instantly.
 <!-- BEGIN dev-agent-skills skills table (managed by scripts/regen-readme.mjs -- do not edit this block by hand, edit the source SKILL.md instead and re-run setup.sh) -->
 | Skill | What it does |
 |---|---|
+| [`architecture-context`](./architecture-context/) | Use to answer "what kind of system is this project, architecturally" -- not "what does this diff do" (that's… |
 | [`coding-standards`](./coding-standards/) | Company coding standards for frontend, backend, and database work. Use whenever writing or modifying applicat… |
 | [`coding-standards-backend`](./coding-standards-backend/) | Company backend conventions for API endpoints, middleware, and background jobs -- file-based endpoint structu… |
 | [`coding-standards-database`](./coding-standards-database/) | Company database conventions -- schema-as-source-of-truth, model/field naming, column type rules (decimal mon… |
@@ -27,6 +28,7 @@ in your AI IDE instantly.
 | [`skill-add`](./skill-add/) | Use when the user wants to add, import, or install a new external skill from a git repository — phrases like… |
 | [`skill-factory`](./skill-factory/) | Interviews the requester through a structured clarification protocol, then designs, writes, and validates a n… |
 | [`skill-update`](./skill-update/) | Use when the user wants to update, refresh, sync, or pull the latest version of one or all tracked external s… |
+| [`swift-conventions`](./swift-conventions/) | A Swift language convention baseline grounded in four verified official sources: The Swift Programming Langua… |
 | [`sync-prs`](./sync-prs/) | Use when the user asks to sync, check, refresh, or triage their own open GitHub pull requests — phrases like… |
 | [`typescript-conventions`](./typescript-conventions/) | A TypeScript convention baseline for typing, validation, enum handling, imports, and naming — favoring types… |
 | [`webapp-conventions`](./webapp-conventions/) | Portable conventions for building features in a SvelteKit + Tailwind web app — the layer above raw framework… |

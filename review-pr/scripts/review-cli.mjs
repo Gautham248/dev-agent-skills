@@ -37,7 +37,12 @@ import {
   detectInjectionAttempts,
   loadRepoConventions,
   planDiffChunks,
+  shouldRunArchitectCheck,
+  validateCoverageFinding,
+  dedupeCoverageFindings,
   DEFAULT_MAX_FINDINGS,
+  DEFAULT_ARCHITECT_FILE_THRESHOLD,
+  DEFAULT_ARCHITECT_SUBSYSTEM_THRESHOLD,
 } from "./review-lib.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -79,6 +84,83 @@ function readFindings(p) {
   const list = Array.isArray(parsed) ? parsed : parsed.findings;
   if (!Array.isArray(list)) die(`findings file must be an array, or an object with a "findings" array`);
   return list;
+}
+
+function readArchitectureReview(p) {
+  if (!p) return null;
+  if (!fs.existsSync(p)) die(`--architecture-review file not found: ${p}`);
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch (e) {
+    die(`--architecture-review file is not valid JSON: ${e.message}`);
+  }
+  return parsed;
+}
+
+/**
+ * Shared by --pre-existing-compile-errors and --sibling-context: both are
+ * plain JSON, informational-only inputs with no validation/dedup pipeline
+ * of their own (unlike findings or coverage findings) -- read-and-render,
+ * nothing more. `kind` asserts the top-level shape so a wrong-shape file
+ * fails loudly (like the missing-file and malformed-JSON cases) rather than
+ * rendering garbage (`undefined:undefined`) or being silently dropped.
+ */
+function readJsonFlag(p, flagName, { kind, shapeHint } = {}) {
+  if (!p) return null;
+  if (!fs.existsSync(p)) die(`--${flagName} file not found: ${p}`);
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch (e) {
+    die(`--${flagName} file is not valid JSON: ${e.message}`);
+  }
+  if (kind === "array" && !Array.isArray(parsed)) {
+    die(`--${flagName} must be a JSON array${shapeHint ? ` of ${shapeHint}` : ""}`);
+  }
+  if (kind === "object" && (parsed === null || Array.isArray(parsed) || typeof parsed !== "object")) {
+    die(`--${flagName} must be a JSON object${shapeHint ? ` of ${shapeHint}` : ""}`);
+  }
+  return parsed;
+}
+
+/**
+ * Validates and dedupes an architecture-review file's coverageFindings.
+ * Unlike line findings (runValidation, above) an invalid coverage finding
+ * does not risk a 422 on post — there is no anchor to reject — so this
+ * drops invalid entries with a warning rather than dying the whole command.
+ * A malformed coverage observation is not worth losing the rest of the
+ * review over.
+ */
+function runCoverageValidation(raw) {
+  const findings = Array.isArray(raw?.coverageFindings) ? raw.coverageFindings : [];
+  const valid = [];
+  for (const f of findings) {
+    const r = validateCoverageFinding(f);
+    if (r.ok) valid.push(f);
+    else console.error(`⚠ dropping invalid coverage finding (${f?.subsystem || "?"}): ${r.errors.join("; ")}`);
+  }
+  const merged = dedupeCoverageFindings(valid);
+  const { post, held } = partitionByConfidence(merged);
+  return { submitted: findings.length, valid, merged, post, held };
+}
+
+// ---------------------------------------------------------------------------
+function cmdCheckScope(a) {
+  const changedFilesCount = Number(a["changed-files"]);
+  if (!Number.isFinite(changedFilesCount)) die("--changed-files must be a number (from `gh pr view`'s changedFiles)");
+  const matchedSubsystemCount = a["matched-subsystems"] ? Number(a["matched-subsystems"]) : 0;
+
+  const run = shouldRunArchitectCheck({
+    changedFilesCount,
+    matchedSubsystemCount,
+    fileThreshold: a["file-threshold"] ? Number(a["file-threshold"]) : DEFAULT_ARCHITECT_FILE_THRESHOLD,
+    subsystemThreshold: a["subsystem-threshold"] ? Number(a["subsystem-threshold"]) : DEFAULT_ARCHITECT_SUBSYSTEM_THRESHOLD,
+  });
+
+  console.log(run ? "RUN_ARCHITECT_CHECK" : "SKIP_ARCHITECT_CHECK");
+  console.log(`  changed files:        ${changedFilesCount} (threshold ${a["file-threshold"] || DEFAULT_ARCHITECT_FILE_THRESHOLD})`);
+  console.log(`  matched subsystems:   ${matchedSubsystemCount} (threshold ${a["subsystem-threshold"] || DEFAULT_ARCHITECT_SUBSYSTEM_THRESHOLD})`);
 }
 
 // ---------------------------------------------------------------------------
@@ -196,6 +278,9 @@ function cmdValidate(a) {
   const findings = readFindings(a.findings);
   const { valid, invalid, merged, post, held } = runValidation(files, findings);
 
+  const architectureReview = readArchitectureReview(a["architecture-review"]);
+  const coverage = architectureReview ? runCoverageValidation(architectureReview) : null;
+
   console.log(`# Validation\n`);
   console.log(`  submitted: ${findings.length}`);
   console.log(`  valid:     ${valid.length}`);
@@ -221,6 +306,17 @@ function cmdValidate(a) {
     for (const f of held) console.log(`  [${f.severity}] ${f.file}:${f.line} · ${Math.round(f.confidence * 100)}%`);
   }
 
+  if (coverage) {
+    console.log(`\n# Architecture review (coverage findings)\n`);
+    console.log(`  submitted: ${coverage.submitted}`);
+    console.log(`  valid:     ${coverage.valid.length}`);
+    console.log(`  after dedupe: ${coverage.merged.length}`);
+    console.log(`  postable:  ${coverage.post.length}   held (low confidence): ${coverage.held.length}\n`);
+    for (const f of coverage.post) {
+      console.log(`  [coverage] ${f.subsystem} · ${Math.round(f.confidence * 100)}%`);
+    }
+  }
+
   if (invalid.length) process.exitCode = 2;
 }
 
@@ -237,6 +333,13 @@ function cmdPost(a) {
   const files = readDiff(a.diff);
   const findings = readFindings(a.findings);
   const { invalid, post, held, merged } = runValidation(files, findings);
+
+  const architectureReviewRaw = readArchitectureReview(a["architecture-review"]);
+  const coverage = architectureReviewRaw ? runCoverageValidation(architectureReviewRaw) : null;
+
+  const preExistingCompileErrors = readJsonFlag(a["pre-existing-compile-errors"], "pre-existing-compile-errors", { kind: "array", shapeHint: "{ file, line, message }" }) || [];
+  const siblingContext = readJsonFlag(a["sibling-context"], "sibling-context", { kind: "object", shapeHint: "{ generalCommentCount, siblingPr }" });
+  const completenessChecks = readJsonFlag(a["completeness-checks"], "completeness-checks", { kind: "object", shapeHint: "{ stateMutation, identity, resourceCleanup }" });
 
   if (invalid.length) {
     die(
@@ -418,6 +521,15 @@ function cmdPost(a) {
     }
   }
 
+  const architectureReview = architectureReviewRaw
+    ? {
+        narrative: architectureReviewRaw.narrative || "",
+        subsystemsTouched: architectureReviewRaw.subsystemsTouched || [],
+        coverageFindings: coverage.post,
+        heldCoverageCount: coverage.held.length,
+      }
+    : null;
+
   const summary =
     renderSummary({
       findings: postAfterDedup, unanchorable: [], held, truncated,
@@ -425,6 +537,10 @@ function cmdPost(a) {
       lensReport,
       prMeta: { repo, number: pr, changedFiles: files.length },
       eventDecision,
+      architectureReview,
+      preExistingCompileErrors,
+      siblingContext,
+      completenessChecks,
     }) + `\n\n${reviewMarker(currentSha)}\n`;
 
   const payload = { ...draft, body: summary };
@@ -441,7 +557,29 @@ function cmdPost(a) {
       console.log(`  deferred: ${stillOpen.length} prior finding(s) still open, not reposted — see summary`);
     }
     console.log(`  comments: ${payload.comments.length}${truncated.length ? ` (+${truncated.length} in summary)` : ""}`);
-    console.log(`  held:     ${held.length}\n`);
+    console.log(`  held:     ${held.length}`);
+    if (coverage) {
+      console.log(
+        `  architecture review: ${coverage.post.length} coverage finding(s) shown, ` +
+          `${coverage.held.length} held back`
+      );
+    }
+    if (preExistingCompileErrors.length) {
+      console.log(`  pre-existing compile errors: ${preExistingCompileErrors.length} (not blocking, listed in summary)`);
+    }
+    if (siblingContext) {
+      const bits = [];
+      if (siblingContext.generalCommentCount) bits.push(`${siblingContext.generalCommentCount} general comment(s)`);
+      if (siblingContext.siblingPr) bits.push(`sibling PR #${siblingContext.siblingPr.number}`);
+      if (bits.length) console.log(`  context considered: ${bits.join(", ")}`);
+    }
+    if (completenessChecks) {
+      const { stateMutation = 0, identity = 0, resourceCleanup = 0 } = completenessChecks;
+      console.log(
+        `  completeness gate: ${stateMutation} state-mutation, ${identity} identity, ${resourceCleanup} resource-cleanup candidate(s) traced`
+      );
+    }
+    console.log("");
     console.log(JSON.stringify(payload, null, 2));
     return;
   }
@@ -581,7 +719,8 @@ function cmdDiscard(a) {
 // ---------------------------------------------------------------------------
 const a = args(process.argv.slice(2));
 const cmd = a._[0];
-if (cmd === "plan") cmdPlan(a);
+if (cmd === "check-scope") cmdCheckScope(a);
+else if (cmd === "plan") cmdPlan(a);
 else if (cmd === "validate") cmdValidate(a);
 else if (cmd === "post") cmdPost(a);
 else if (cmd === "submit") cmdSubmit(a);
@@ -589,14 +728,50 @@ else if (cmd === "discard") cmdDiscard(a);
 else {
   console.log(`review-pr CLI
 
+  check-scope --changed-files <n> [--matched-subsystems <n>]
+              [--file-threshold <n>] [--subsystem-threshold <n>]
+
+              Prints RUN_ARCHITECT_CHECK or SKIP_ARCHITECT_CHECK. Defaults:
+              ${DEFAULT_ARCHITECT_FILE_THRESHOLD} changed files, ${DEFAULT_ARCHITECT_SUBSYSTEM_THRESHOLD} matched subsystems.
+
   plan     --diff <f> [--skills-root <d>] [--domains a,b] [--registry <f>] [--json <f>]
-  validate --diff <f> --findings <f>
+  validate --diff <f> --findings <f> [--architecture-review <f>]
   post     --repo <o/r> --pr <n> --diff <f> --findings <f> --head-sha <sha>
-           [--plan <f>] [--dry-run] [--publish]
+           [--plan <f>] [--architecture-review <f>]
+           [--pre-existing-compile-errors <f>] [--sibling-context <f>]
+           [--completeness-checks <f>]
+           [--dry-run] [--publish]
 
            Creates a PENDING review by default: the comments appear inline in
            the real GitHub diff but are visible only to you until you submit.
            --publish skips the pending stage and posts immediately.
+
+           --architecture-review points at a JSON file
+           { narrative, subsystemsTouched: [...], coverageFindings: [...] }
+           produced by Step 2b of SKILL.md — only relevant for PRs that
+           crossed the check-scope threshold. Coverage findings are
+           validated and deduped separately from line findings (see
+           validateCoverageFinding in review-lib.mjs) and rendered as their
+           own "Architecture review" section in the posted summary, not as
+           inline comments.
+
+           --pre-existing-compile-errors points at a JSON array of
+           { file, line, message } — real compiler diagnostics from Step 1b
+           whose line the diff never touched, so they can't be inline
+           comments. Rendered as their own summary section, full list,
+           informational only — never blocks the PR.
+
+           --sibling-context points at a JSON file
+           { generalCommentCount, siblingPr: {owner, repo, number} | null }
+           from Step 0 — rendered as a one-line transparency note, not a
+           finding.
+
+           --completeness-checks points at a JSON object
+           { stateMutation, identity, resourceCleanup } — candidate counts
+           from Step 4c's mandatory gate. Rendered as a one-line count so a
+           clean gate run is provable, not silently indistinguishable from
+           a gate that didn't run. Any actual gap Step 4c found is already
+           a normal finding in --findings, not duplicated here.
 
   submit   --repo <o/r> --pr <n> --review-id <id> [--event COMMENT|APPROVE|REQUEST_CHANGES] [--body <text>]
   discard  --repo <o/r> --pr <n> --review-id <id>

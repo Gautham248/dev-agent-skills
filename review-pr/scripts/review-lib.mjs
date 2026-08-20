@@ -40,6 +40,22 @@ export const DEFAULT_MIN_CONFIDENCE = 0.6;
  */
 export const DEFAULT_MAX_FINDINGS = 15;
 
+/**
+ * A PR at or above this many changed files gets the broad architect-pass
+ * check (Step 2b) in addition to the normal per-lens diff review, on the
+ * theory that a change this size is unlikely to be a single localized fix.
+ */
+export const DEFAULT_ARCHITECT_FILE_THRESHOLD = 10;
+
+/**
+ * A PR touching at least this many distinct architecture-context subsystems
+ * also gets the architect-pass check, even under the file-count threshold —
+ * catches a broad, cross-cutting change that happens to touch few files
+ * (e.g. one line changed in each of four different subsystems' entry
+ * points) that DEFAULT_ARCHITECT_FILE_THRESHOLD alone would miss.
+ */
+export const DEFAULT_ARCHITECT_SUBSYSTEM_THRESHOLD = 3;
+
 // ---------------------------------------------------------------------------
 // Unified diff parsing
 // ---------------------------------------------------------------------------
@@ -739,8 +755,366 @@ export function sortFindings(findings) {
 }
 
 // ---------------------------------------------------------------------------
-// Review event resolution (the self-review 422 guard)
+// Architect-pass (Step 2b) — broad-scope coverage findings
 // ---------------------------------------------------------------------------
+//
+// A "coverage" finding is a different kind of object from a line-anchored
+// finding above: it says a subsystem this PR's feature would plausibly need
+// was never touched, not that a specific line is wrong. There is no diff
+// line to anchor it to, so it deliberately does NOT reuse validateFinding /
+// dedupeFindings (both anchor-based) or the blocker/should/nit severity
+// scale (first-principles-review's, reused verbatim elsewhere in this file —
+// coverage isn't a point on that scale, it's a different axis entirely, so
+// giving it its own vocabulary avoids diluting that one).
+
+/**
+ * Decides whether Step 2b's architect-pass check runs at all. Pure and
+ * threshold-based on purpose — the actual "does this look like a broad,
+ * multi-component feature" judgment happens inside the check itself (an
+ * LLM reasoning step), not here. This function only decides whether that
+ * more expensive step is worth invoking for this particular PR.
+ */
+export function shouldRunArchitectCheck({
+  changedFilesCount,
+  matchedSubsystemCount,
+  fileThreshold = DEFAULT_ARCHITECT_FILE_THRESHOLD,
+  subsystemThreshold = DEFAULT_ARCHITECT_SUBSYSTEM_THRESHOLD,
+}) {
+  const files = Number(changedFilesCount) || 0;
+  const subsystems = Number(matchedSubsystemCount) || 0;
+  return files >= fileThreshold || subsystems >= subsystemThreshold;
+}
+
+/**
+ * A coverage finding names a subsystem the diff didn't touch, so it cannot
+ * carry `file`/`line`/`evidence` — validateFinding would reject it on
+ * exactly those grounds, correctly, since those fields mean something
+ * different for a line comment. This is the parallel, deliberately smaller
+ * check: just enough structure that renderSummary can trust it.
+ */
+export function validateCoverageFinding(finding) {
+  const errors = [];
+  const f = finding || {};
+
+  if (f.type !== "coverage") errors.push('`type` must be "coverage"');
+  if (!f.subsystem || typeof f.subsystem !== "string" || f.subsystem.trim() === "") {
+    errors.push("missing `subsystem`");
+  }
+  if (!f.rationale || typeof f.rationale !== "string" || f.rationale.trim().length < 15) {
+    errors.push("`rationale` must explain why the omission is suspicious, not just name the subsystem");
+  }
+  if (typeof f.confidence !== "number" || f.confidence < 0 || f.confidence > 1) {
+    errors.push("`confidence` must be a number between 0 and 1");
+  }
+
+  return { ok: errors.length === 0, errors };
+}
+
+/**
+ * Two lens passes (or two runs of the architect check within the same
+ * session) can independently flag the same subsystem. Keep one entry per
+ * subsystem, preferring the higher-confidence rationale — unlike
+ * dedupeFindings, there's no anchor to merge multiple lenses onto, so this
+ * doesn't accumulate a confidence boost from corroboration the way
+ * dedupeFindings does; it just picks the stronger of the two.
+ */
+export function dedupeCoverageFindings(findings) {
+  const bySubsystem = new Map();
+  for (const f of findings) {
+    const key = String(f.subsystem || "").trim().toLowerCase();
+    if (!key) continue;
+    const existing = bySubsystem.get(key);
+    if (!existing || f.confidence > existing.confidence) {
+      bySubsystem.set(key, f);
+    }
+  }
+  return [...bySubsystem.values()];
+}
+
+// ---------------------------------------------------------------------------
+// Step 4c — mandatory completeness gate
+// ---------------------------------------------------------------------------
+//
+// first-principles-review's own "Pillar 2: Trace, don't read" methodology
+// already says to git-grep every caller and trace every write path -- this
+// gate exists because that's advisory, not enforced, and on a large diff a
+// single fresh reasoning pass can simply not get to every candidate. These
+// three categories were chosen because two of them are the exact real
+// misses that motivated this gate (a computed score never written back; an
+// identity check reclassified as dead code without checking whether the
+// responsibility moved elsewhere) and the third (resource cleanup) is the
+// same shape of bug in a timer/socket-heavy codebase: a handle created
+// without a traceable cleanup on every exit path.
+//
+// The regexes below are deliberately coarse keyword matches over added
+// diff lines, not real static analysis -- they decide WHERE a trace is
+// mandatory, never WHETHER something is actually a bug. That determination
+// requires reading the real function body and its callers, which is the
+// LLM step's job (SKILL.md Step 4c), the same "trace, don't read" work
+// Pillar 2 already describes. Over-triggering here (a candidate that turns
+// out fine) costs one extra trace; under-triggering is the failure mode
+// this gate exists to close, so these regexes lean broad on purpose.
+
+export const STATE_MUTATION_KEYWORD_RE = /\b(scor\w*|balanc\w*|points?|credits?|totalScore|amounts?)\b/i;
+export const IDENTITY_KEYWORD_RE = /\b(clientId|sessionId|userId|adminId|isAdmin|token)\b/i;
+export const RESOURCE_CREATE_RE = /\b(setTimeout|setInterval)\s*\(|\.on\(|addEventListener\(|\.subscribe\(/;
+export const RESOURCE_CLEANUP_RE = /clearTimeout\(|clearInterval\(|\.off\(|removeEventListener\(|\.unsubscribe\(/;
+
+/**
+ * Scans every added line in the diff against the three trigger regexes.
+ * Pure and cheap -- runs on every review, not gated behind Step 2b's
+ * broad-PR threshold, since a state-mutation or identity bug can exist in
+ * a 3-file PR as easily as a 68-file one. A PR that matches nothing
+ * produces three empty arrays and the gate is a genuine no-op, not a
+ * skipped check -- the cost only shows up when there's something to trace.
+ */
+export function findCompletenessCandidates(files) {
+  const result = { stateMutation: [], identity: [], resourceCreate: [] };
+  for (const file of files || []) {
+    for (const anchor of file.anchors.values()) {
+      if (anchor.side !== "RIGHT" || anchor.kind !== "added") continue;
+      const text = anchor.content || "";
+      if (STATE_MUTATION_KEYWORD_RE.test(text)) {
+        result.stateMutation.push({ file: file.path, line: anchor.line, text });
+      }
+      if (IDENTITY_KEYWORD_RE.test(text)) {
+        result.identity.push({ file: file.path, line: anchor.line, text });
+      }
+      if (RESOURCE_CREATE_RE.test(text)) {
+        result.resourceCreate.push({ file: file.path, line: anchor.line, text });
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Widens candidates using architecture-context's subsystem summaries, when
+ * Step 2b ran. A subsystem-level semantic signal ("state-sync", "scoring")
+ * is stronger evidence than a line-level keyword match, and catches cases
+ * the line-level regex misses entirely -- e.g. a value written through a
+ * helper function whose call site doesn't literally contain the word
+ * "score". This is architecture-context's subsystem model actively
+ * driving what gets traced, not just framing text a lens may or may not
+ * read closely.
+ *
+ * Subsystem-derived candidates carry `line: null` -- there's no specific
+ * diff line to point at, the whole subsystem's anchor_files are in scope
+ * for the trace.
+ */
+export function expandCandidatesWithSubsystems(candidates, subsystems) {
+  const result = {
+    stateMutation: [...candidates.stateMutation],
+    identity: [...candidates.identity],
+    resourceCreate: [...candidates.resourceCreate],
+  };
+
+  for (const [id, entry] of Object.entries(subsystems || {})) {
+    const summary = entry?.summary || "";
+    const anchorFiles = entry?.anchor_files || [];
+    const addToCategory = (category, re) => {
+      if (!re.test(summary)) return;
+      for (const file of anchorFiles) {
+        result[category].push({ file, line: null, text: `(subsystem: ${id})` });
+      }
+    };
+    addToCategory("stateMutation", STATE_MUTATION_KEYWORD_RE);
+    addToCategory("identity", IDENTITY_KEYWORD_RE);
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Step 1b — compiler/type-checker diagnostics
+// ---------------------------------------------------------------------------
+//
+// Unlike every finding above, a compiler diagnostic is not an inference —
+// it's ground truth from the project's own tooling. It always gets
+// confidence 1.0 (never held back, never confidence-gated) and severity
+// "blocker" (a project that doesn't compile is broken, full stop). The one
+// piece of judgment left is WHERE it lands: on a line this diff actually
+// added (a normal, line-anchored finding, validated the same way as any
+// other) versus a line the diff never touched (a pre-existing error the
+// diff's own changes surfaced or just happens to coexist with — this
+// can't be validateFinding'd against the diff at all, since it isn't in
+// it, so it gets its own summary section instead, the same treatment
+// Step 2b's coverage findings got for the same underlying reason: no diff
+// line to anchor a real observation to).
+
+/**
+ * Picks the command to run, in priority order: an explicit package.json
+ * script that names a type checker (`typecheck`, then `type-check`) takes
+ * precedence over the ambiguous `check` script, which many non-SvelteKit
+ * repos use for lint/format rather than a type check and would otherwise
+ * silently produce a false "clean type-check". Falls back to `check`
+ * (SvelteKit convention — usually wraps `svelte-check`) only when neither
+ * unambiguous name is present, then to bare `tsc --noEmit` if a tsconfig.json
+ * exists and no script covers it. Returns null if neither is available —
+ * callers must skip Step 1b cleanly in that case, not silently claim a
+ * clean type-check.
+ */
+export function detectTypecheckCommand({ scripts = {}, hasTsconfig = false } = {}) {
+  for (const key of ["typecheck", "type-check", "check"]) {
+    if (typeof scripts[key] === "string" && scripts[key].trim()) {
+      return { command: ["npm", "run", key], source: `package.json script "${key}"` };
+    }
+  }
+  if (hasTsconfig) {
+    return { command: ["npx", "tsc", "--noEmit"], source: "tsconfig.json (no package.json script found)" };
+  }
+  return null;
+}
+
+/**
+ * Parses `tsc`'s default (non---pretty) diagnostic format:
+ *   path/to/file.ts(12,5): error TS2345: message text
+ * Verified against real `tsc --noEmit` output, not a guessed format.
+ */
+export function parseTscDiagnostics(rawOutput) {
+  const results = [];
+  const re = /^(.+?)\((\d+),(\d+)\): (error|warning) (TS\d+): (.+)$/;
+  for (const line of String(rawOutput || "").split("\n")) {
+    const m = line.match(re);
+    if (!m) continue;
+    results.push({
+      file: m[1],
+      line: Number(m[2]),
+      column: Number(m[3]),
+      severity: m[4],
+      code: m[5],
+      message: m[6].trim(),
+      tool: "tsc",
+    });
+  }
+  return results;
+}
+
+/**
+ * Parses `svelte-check`'s diagnostic format:
+ *   /abs/path/File.svelte:12:5
+ *   Error: message text (ts)
+ *   <one or more lines of surrounding source, until a blank line>
+ * Verified against real `svelte-check` output (including the multi-file,
+ * multi-diagnostic case), not a guessed format. `cwd` strips the absolute
+ * path prefix svelte-check always emits down to a repo-relative path, so
+ * it matches the diff's own path convention.
+ */
+export function parseSvelteCheckDiagnostics(rawOutput, cwd = "") {
+  const results = [];
+  const lines = String(rawOutput || "").split("\n");
+  const headerRe = /^(.+):(\d+):(\d+)$/;
+  const messageRe = /^(Error|Warning): (.+?)(?: \((\w+)\))?$/;
+
+  for (let i = 0; i < lines.length; i++) {
+    const header = lines[i].match(headerRe);
+    if (!header) continue;
+    const messageLine = lines[i + 1];
+    if (!messageLine) continue;
+    const msg = messageLine.match(messageRe);
+    if (!msg) continue;
+
+    let file = header[1];
+    if (cwd && file.startsWith(cwd)) {
+      file = file.slice(cwd.length).replace(/^\/+/, "");
+    }
+
+    results.push({
+      file,
+      line: Number(header[2]),
+      column: Number(header[3]),
+      severity: msg[1] === "Error" ? "error" : "warning",
+      message: msg[2].trim(),
+      tool: "svelte-check",
+    });
+    i++; // consume the message line so a coincidental header-shaped source line isn't double-parsed
+  }
+  return results;
+}
+
+/**
+ * Splits diagnostics into ones that land on a line this diff actually
+ * added (kind === "added" in the anchor index) versus everything else —
+ * a pre-existing error in an untouched file, or on a context line the
+ * diff merely passed through without changing. Only the anchorIndex's own
+ * "added" classification counts as "this PR introduced it"; a diagnostic
+ * on a context line in a changed file is still pre-existing relative to
+ * this PR, even though the file itself is part of the diff.
+ */
+export function classifyDiagnosticsAgainstDiff(diagnostics, anchorIndex) {
+  const introduced = [];
+  const preExisting = [];
+  for (const d of diagnostics) {
+    if (d.severity === "warning") continue; // Step 1b is about compile ERRORS; warnings are noise here.
+    const anchor = anchorIndex.get(d.file, d.line, "RIGHT");
+    if (anchor && anchor.kind === "added") introduced.push(d);
+    else preExisting.push(d);
+  }
+  return { introduced, preExisting };
+}
+
+/**
+ * Turns an "introduced by this diff" diagnostic into a normal finding —
+ * same shape validateFinding already checks, so no new validation path is
+ * needed for this half. `evidenceLine` is the actual RIGHT-side source
+ * line's content, read from the diff's own anchor (never re-read from
+ * disk — the diff is the source of truth for what evidence-in-diff means
+ * everywhere else in this file, and compiler findings shouldn't be an
+ * exception).
+ */
+export function compilerDiagnosticToFinding(diag, evidenceLine) {
+  return {
+    lens: "compiler",
+    severity: "blocker",
+    file: diag.file,
+    line: diag.line,
+    side: "RIGHT",
+    evidence: evidenceLine,
+    rationale: `${diag.tool} (${diag.code || "error"}): ${diag.message}`,
+    confidence: 1,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Sibling-PR context — general comments + a linked same-org PR's own review
+// ---------------------------------------------------------------------------
+//
+// Neither of these produces a validated finding. A general comment saying
+// "match Lawyerup's convention" or a sibling PR's own review comments are
+// framing, not a verifiable claim the way a diff line or a compiler
+// diagnostic is — they get carried into lens passes as context, the same
+// treatment Step 2b's narrative already gets, not pushed through
+// validateFinding.
+
+/**
+ * Scans a list of comment bodies for github.com PR URLs belonging to the
+ * same owner/repo family, excluding a self-reference to the PR currently
+ * being reviewed. Deliberately scoped to the same owner — an org's own
+ * convention-setting PR is the realistic case (as in PR #21 pointing at
+ * PR #17 in the same org), and following an arbitrary external repo's PR
+ * link has no such justification and a much larger blast radius.
+ */
+export function extractSiblingPrRefs(commentBodies, { owner, repo, excludeNumber } = {}) {
+  const re = /https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/g;
+  const seen = new Set();
+  const results = [];
+  for (const body of commentBodies || []) {
+    if (typeof body !== "string") continue;
+    let m;
+    while ((m = re.exec(body)) !== null) {
+      const [, refOwner, refRepo, refNumberStr] = m;
+      const refNumber = Number(refNumberStr);
+      if (owner && refOwner.toLowerCase() !== owner.toLowerCase()) continue;
+      if (repo && refRepo.toLowerCase() !== repo.toLowerCase()) continue;
+      if (excludeNumber && refNumber === Number(excludeNumber)) continue;
+      const key = `${refOwner}/${refRepo}#${refNumber}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push({ owner: refOwner, repo: refRepo, number: refNumber, url: m[0] });
+    }
+  }
+  return results;
+}
 
 /**
  * GitHub rejects APPROVE and REQUEST_CHANGES on your own PR with a 422.
@@ -868,6 +1242,10 @@ export function renderSummary({
   lensReport,
   prMeta = {},
   eventDecision,
+  architectureReview = null,
+  preExistingCompileErrors = [],
+  siblingContext = null,
+  completenessChecks = null,
 }) {
   const counts = { blocker: 0, should: 0, nit: 0 };
   for (const f of findings) counts[f.severity]++;
@@ -884,6 +1262,98 @@ export function renderSummary({
   if (eventDecision?.downgraded) {
     out.push(`> ${eventDecision.reason}`);
     out.push("");
+  }
+
+  // Sibling-PR / general-comment context (transparency note, not a
+  // finding) — same spirit as architecture-context's "cache was absent,
+  // derived by reading the code directly" note: say what informed the
+  // review rather than let it silently shape findings unattributed.
+  if (siblingContext && (siblingContext.generalCommentCount || siblingContext.siblingPr)) {
+    const parts = [];
+    if (siblingContext.generalCommentCount) {
+      parts.push(`${siblingContext.generalCommentCount} general PR comment(s) considered as framing`);
+    }
+    if (siblingContext.siblingPr) {
+      parts.push(
+        `sibling PR referenced: ${siblingContext.siblingPr.owner}/${siblingContext.siblingPr.repo}#${siblingContext.siblingPr.number}`
+      );
+    }
+    out.push(`_Context considered: ${parts.join("; ")}._`);
+    out.push("");
+  }
+
+  // Pre-existing compile errors — real compiler diagnostics whose line the
+  // diff never touched, so they cannot be validated against the diff the
+  // way an in-diff compiler finding is (see compilerDiagnosticToFinding).
+  // Full list every time, not a count: these are ground truth, not an
+  // inference someone might want summarized away.
+  if (preExistingCompileErrors.length) {
+    out.push("### Pre-existing compile errors (not introduced by this PR)");
+    out.push("");
+    out.push(
+      "_These do not block this PR and are not staged as inline comments — the diff never touched these lines. Listed for visibility only._"
+    );
+    out.push("");
+    for (const d of preExistingCompileErrors) {
+      out.push(`- \`${d.file}:${d.line}\` — ${d.message}`);
+    }
+    out.push("");
+  }
+
+  // Step 4c completeness gate — counts only, not a list: a confirmed-clean
+  // trace produces no finding (correctly), but must still be provable as
+  // having run, rather than silently indistinguishable from not running at
+  // all. Any actual gap already appears as a normal finding above with
+  // lens "completeness-gate" — this line is purely "here's what was
+  // checked," not a duplicate report of what was found.
+  if (completenessChecks) {
+    const { stateMutation = 0, identity = 0, resourceCleanup = 0 } = completenessChecks;
+    if (stateMutation || identity || resourceCleanup) {
+      out.push(
+        `_Completeness gate: ${stateMutation} state-mutation, ${identity} identity, ` +
+          `${resourceCleanup} resource-cleanup candidate(s) traced._`
+      );
+      out.push("");
+    }
+  }
+
+  // Broad-scope architect pass (Step 2b) — only present for PRs that
+  // crossed DEFAULT_ARCHITECT_FILE_THRESHOLD or DEFAULT_ARCHITECT_SUBSYSTEM_THRESHOLD.
+  // Placed before the per-lens breakdown deliberately: this is the
+  // highest-level observation about the PR ("did this touch what a change
+  // like this should touch"), and reads better as framing for what follows
+  // than as one more item buried after the line-level findings.
+  if (architectureReview) {
+    out.push("### Architecture review");
+    out.push("");
+    if (architectureReview.narrative) {
+      out.push(architectureReview.narrative.trim());
+      out.push("");
+    }
+    if (architectureReview.subsystemsTouched?.length) {
+      out.push(`**Subsystems touched:** ${architectureReview.subsystemsTouched.join(", ")}`);
+      out.push("");
+    }
+    const coverageFindings = architectureReview.coverageFindings || [];
+    if (coverageFindings.length) {
+      out.push("**Possibly missing:**");
+      out.push("");
+      for (const f of coverageFindings) {
+        out.push(`- **${f.subsystem}** (${Math.round(f.confidence * 100)}% confidence) — ${f.rationale.trim()}`);
+      }
+      out.push("");
+    } else {
+      out.push(
+        "_No coverage gaps flagged — the subsystems this PR would plausibly need all appear to be touched._"
+      );
+      out.push("");
+    }
+    if (architectureReview.heldCoverageCount) {
+      out.push(
+        `_${architectureReview.heldCoverageCount} low-confidence coverage observation(s) held back, reviewer-only._`
+      );
+      out.push("");
+    }
   }
 
   const hasLensInfo =
