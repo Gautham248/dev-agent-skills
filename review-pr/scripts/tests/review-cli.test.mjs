@@ -321,7 +321,7 @@ describe("review-cli.mjs post --completeness-checks — real subprocess", () => 
 
     fs.writeFileSync(diffPath, SAMPLE_DIFF);
     fs.writeFileSync(findingsPath, JSON.stringify([]));
-    fs.writeFileSync(completenessPath, JSON.stringify({ stateMutation: 2, identity: 1, resourceCleanup: 0 }));
+    fs.writeFileSync(completenessPath, JSON.stringify({ stateMutation: 2, identity: 1, resourceCleanup: 0, raceReadThenWrite: 4 }));
 
     const { stdout, status } = runCli([
       "post",
@@ -335,12 +335,16 @@ describe("review-cli.mjs post --completeness-checks — real subprocess", () => 
     ]);
 
     assert.equal(status, 0);
-    assert.match(stdout, /completeness gate: 2 state-mutation, 1 identity, 0 resource-cleanup candidate\(s\) traced/);
+    assert.match(
+      stdout,
+      /completeness gate: 2 state-mutation, 1 identity, 0 resource-cleanup, 4 race-condition candidate\(s\) traced/
+    );
 
     const jsonStart = stdout.indexOf("{");
     const payload = JSON.parse(stdout.slice(jsonStart));
     assert.ok(payload.body.includes("Completeness gate"));
     assert.ok(payload.body.includes("2 state-mutation"));
+    assert.ok(payload.body.includes("4 race-condition"));
   });
 
   test("all-zero counts are omitted from the posted body (nothing to prove ran)", () => {
@@ -415,7 +419,7 @@ describe("review-cli.mjs post --completeness-checks — real subprocess", () => 
       "--head-sha", "deadbeef", "--dry-run",
     ]);
     assert.notEqual(status, 0);
-    assert.match(stderr, /--completeness-checks must be a JSON object of \{ stateMutation, identity, resourceCleanup \}/);
+    assert.match(stderr, /--completeness-checks must be a JSON object of \{ stateMutation, identity, resourceCleanup, raceReadThenWrite \}/);
   });
 });
 

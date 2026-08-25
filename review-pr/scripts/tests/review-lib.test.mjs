@@ -1706,17 +1706,26 @@ describe("renderSummary — pre-existing compile errors and sibling context", ()
 
   test("renders completeness-gate counts when any category is non-zero", () => {
     const summary = renderSummary(
-      baseArgs({ completenessChecks: { stateMutation: 2, identity: 1, resourceCleanup: 0 } })
+      baseArgs({ completenessChecks: { stateMutation: 2, identity: 1, resourceCleanup: 0, raceReadThenWrite: 0 } })
     );
     assert.ok(summary.includes("Completeness gate"));
     assert.ok(summary.includes("2 state-mutation"));
     assert.ok(summary.includes("1 identity"));
     assert.ok(summary.includes("0 resource-cleanup"));
+    assert.ok(summary.includes("0 race-condition"));
+  });
+
+  test("renders a non-zero raceReadThenWrite count on its own, even when the other three are zero", () => {
+    const summary = renderSummary(
+      baseArgs({ completenessChecks: { stateMutation: 0, identity: 0, resourceCleanup: 0, raceReadThenWrite: 3 } })
+    );
+    assert.ok(summary.includes("Completeness gate"));
+    assert.ok(summary.includes("3 race-condition"));
   });
 
   test("omits the completeness-gate line when all counts are zero (nothing to prove ran)", () => {
     const summary = renderSummary(
-      baseArgs({ completenessChecks: { stateMutation: 0, identity: 0, resourceCleanup: 0 } })
+      baseArgs({ completenessChecks: { stateMutation: 0, identity: 0, resourceCleanup: 0, raceReadThenWrite: 0 } })
     );
     assert.ok(!summary.includes("Completeness gate"));
   });
@@ -1792,7 +1801,56 @@ describe("findCompletenessCandidates — trigger regexes", () => {
     assert.equal(candidates.resourceCreate.length, 1);
   });
 
-  test("a diff with none of the three keywords produces three empty arrays — genuine no-op", () => {
+  test("REAL BUG 3: flags the findFirst read-half of the resolveTagId/getOrCreateTodayOccurrence race", () => {
+    const diff = [
+      "diff --git a/packages/backend/src/services/tags.service.ts b/packages/backend/src/services/tags.service.ts",
+      "index 5555555..6666666 100644",
+      "--- a/packages/backend/src/services/tags.service.ts",
+      "+++ b/packages/backend/src/services/tags.service.ts",
+      "@@ -10,6 +10,10 @@",
+      "+export async function resolveTagId(spaceId: string, name: string) {",
+      "+\tconst existing = await prisma.tag.findFirst({ where: { spaceId, name } });",
+      "+\tif (existing) return existing.id;",
+      "+\tconst created = await prisma.tag.create({ data: { spaceId, name } });",
+      "+\treturn created.id;",
+      "",
+    ].join("\n");
+    const candidates = findCompletenessCandidates(parseUnifiedDiff(diff));
+    assert.equal(candidates.raceReadThenWrite.length, 1);
+    assert.equal(candidates.raceReadThenWrite[0].file, "packages/backend/src/services/tags.service.ts");
+    assert.match(candidates.raceReadThenWrite[0].text, /findFirst/);
+  });
+
+  test("also flags findUnique and findOne, not just Prisma's findFirst", () => {
+    const diff = [
+      "diff --git a/x.ts b/x.ts",
+      "index 1111111..2222222 100644",
+      "--- a/x.ts",
+      "+++ b/x.ts",
+      "@@ -1,3 +1,3 @@",
+      "+const a = await prisma.user.findUnique({ where: { email } });",
+      "+const b = await Model.findOne({ email });",
+      "",
+    ].join("\n");
+    const candidates = findCompletenessCandidates(parseUnifiedDiff(diff));
+    assert.equal(candidates.raceReadThenWrite.length, 2);
+  });
+
+  test("a plain findFirst with no other keyword nearby still flags — the trace step decides if it's real, not the regex", () => {
+    const diff = [
+      "diff --git a/x.ts b/x.ts",
+      "index 1111111..2222222 100644",
+      "--- a/x.ts",
+      "+++ b/x.ts",
+      "@@ -1,2 +1,2 @@",
+      "+const row = await prisma.log.findFirst({ where: { id } });",
+      "",
+    ].join("\n");
+    const candidates = findCompletenessCandidates(parseUnifiedDiff(diff));
+    assert.equal(candidates.raceReadThenWrite.length, 1);
+  });
+
+  test("a diff with none of the four trigger patterns produces four empty arrays — genuine no-op", () => {
     const diff = [
       "diff --git a/x.ts b/x.ts",
       "index 1111111..2222222 100644",
@@ -1808,6 +1866,7 @@ describe("findCompletenessCandidates — trigger regexes", () => {
     assert.equal(candidates.stateMutation.length, 0);
     assert.equal(candidates.identity.length, 0);
     assert.equal(candidates.resourceCreate.length, 0);
+    assert.equal(candidates.raceReadThenWrite.length, 0);
   });
 
   test("only scans ADDED lines, not removed or context lines", () => {
@@ -1827,8 +1886,18 @@ describe("findCompletenessCandidates — trigger regexes", () => {
   });
 
   test("handles an empty file list without throwing", () => {
-    assert.deepEqual(findCompletenessCandidates([]), { stateMutation: [], identity: [], resourceCreate: [] });
-    assert.deepEqual(findCompletenessCandidates(undefined), { stateMutation: [], identity: [], resourceCreate: [] });
+    assert.deepEqual(findCompletenessCandidates([]), {
+      stateMutation: [],
+      identity: [],
+      resourceCreate: [],
+      raceReadThenWrite: [],
+    });
+    assert.deepEqual(findCompletenessCandidates(undefined), {
+      stateMutation: [],
+      identity: [],
+      resourceCreate: [],
+      raceReadThenWrite: [],
+    });
   });
 });
 
@@ -1885,7 +1954,7 @@ describe("expandCandidatesWithSubsystems — architecture-context as an active t
   });
 
   test("handles no subsystems (Step 2b didn't run) without throwing", () => {
-    const base = { stateMutation: [], identity: [], resourceCreate: [] };
+    const base = { stateMutation: [], identity: [], resourceCreate: [], raceReadThenWrite: [] };
     assert.deepEqual(expandCandidatesWithSubsystems(base, null), base);
     assert.deepEqual(expandCandidatesWithSubsystems(base, undefined), base);
   });
@@ -2012,6 +2081,47 @@ describe("validateCoverageFinding — schema for non-line findings", () => {
   });
 });
 
+function makeRenamedFileFinding(over = {}) {
+  return {
+    type: "renamed-file",
+    file: "packages/backend/src/services/nudges.service.ts",
+    severity: "should",
+    rationale: "Bare try? around JSON.parse swallows the decode error entirely.",
+    confidence: 0.8,
+    ...over,
+  };
+}
+
+describe("validateCoverageFinding — renamed-file findings (Step 2b sweep)", () => {
+  test("accepts a well-formed renamed-file finding", () => {
+    const { ok, errors } = validateCoverageFinding(makeRenamedFileFinding());
+    assert.equal(ok, true, JSON.stringify(errors));
+  });
+
+  test("rejects a renamed-file finding missing `file`", () => {
+    const { ok, errors } = validateCoverageFinding(makeRenamedFileFinding({ file: "" }));
+    assert.equal(ok, false);
+    assert.ok(errors.some((e) => e.includes("file")));
+  });
+
+  test("does not require `subsystem` on a renamed-file finding", () => {
+    const f = makeRenamedFileFinding();
+    assert.equal(f.subsystem, undefined);
+    assert.equal(validateCoverageFinding(f).ok, true);
+  });
+
+  test("severity is optional but must be a real severity value if present", () => {
+    assert.equal(validateCoverageFinding(makeRenamedFileFinding({ severity: undefined })).ok, true);
+    assert.equal(validateCoverageFinding(makeRenamedFileFinding({ severity: "blocker" })).ok, true);
+    assert.equal(validateCoverageFinding(makeRenamedFileFinding({ severity: "urgent" })).ok, false);
+  });
+
+  test("still enforces the shared rationale/confidence rules", () => {
+    assert.equal(validateCoverageFinding(makeRenamedFileFinding({ rationale: "short" })).ok, false);
+    assert.equal(validateCoverageFinding(makeRenamedFileFinding({ confidence: 1.5 })).ok, false);
+  });
+});
+
 describe("dedupeCoverageFindings — one entry per subsystem", () => {
   test("collapses two findings for the same subsystem into one", () => {
     const result = dedupeCoverageFindings([
@@ -2041,6 +2151,23 @@ describe("dedupeCoverageFindings — one entry per subsystem", () => {
 
   test("empty input returns empty output", () => {
     assert.deepEqual(dedupeCoverageFindings([]), []);
+  });
+
+  test("coverage and renamed-file findings dedupe on separate keyspaces even with a coincidentally-matching name", () => {
+    const result = dedupeCoverageFindings([
+      makeCoverageFinding({ subsystem: "nudges" }),
+      makeRenamedFileFinding({ file: "nudges" }),
+    ]);
+    assert.equal(result.length, 2, "a subsystem named 'nudges' and a file named 'nudges' are not the same key");
+  });
+
+  test("collapses two renamed-file findings for the same file, keeping the higher-confidence one", () => {
+    const result = dedupeCoverageFindings([
+      makeRenamedFileFinding({ confidence: 0.6, rationale: "Weaker rationale but still fifteen chars." }),
+      makeRenamedFileFinding({ confidence: 0.9, rationale: "Stronger, more specific rationale here." }),
+    ]);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].confidence, 0.9);
   });
 });
 
@@ -2090,6 +2217,65 @@ describe("renderSummary — architecture review section", () => {
       })
     );
     assert.ok(summary.includes("No coverage gaps flagged"));
+  });
+
+  test("renders renamed-file findings in their own subsection, separate from coverage findings", () => {
+    const summary = renderSummary(
+      baseArgs({
+        architectureReview: {
+          narrative: "372-file relocation PR.",
+          subsystemsTouched: ["backend"],
+          coverageFindings: [
+            makeCoverageFinding({ subsystem: "state-sync" }),
+            makeRenamedFileFinding({
+              file: "packages/backend/src/services/nudges.service.ts",
+              severity: "should",
+              rationale: "Bare try? around JSON.parse swallows the decode error entirely.",
+            }),
+          ],
+          heldCoverageCount: 0,
+        },
+      })
+    );
+    assert.ok(summary.includes("**Possibly missing:**"));
+    assert.ok(summary.includes("**state-sync**"));
+    assert.ok(summary.includes("Findings in renamed/relocated files"));
+    assert.ok(summary.includes("**packages/backend/src/services/nudges.service.ts**"));
+    assert.ok(summary.includes("should,"));
+    assert.ok(summary.includes("Bare try? around JSON.parse"));
+  });
+
+  test("a renamed-file finding does not appear in the coverage 'Possibly missing' list, and vice versa", () => {
+    const summary = renderSummary(
+      baseArgs({
+        architectureReview: {
+          narrative: "n/a",
+          subsystemsTouched: [],
+          coverageFindings: [makeRenamedFileFinding({ file: "OnlyRenamed.swift" })],
+          heldCoverageCount: 0,
+        },
+      })
+    );
+    assert.ok(summary.includes("No coverage gaps flagged"), "no coverage-type findings, so the empty-state line should show");
+    assert.ok(summary.includes("OnlyRenamed.swift"));
+  });
+
+  test("renders a renamed-file finding's suggestion when present", () => {
+    const summary = renderSummary(
+      baseArgs({
+        architectureReview: {
+          narrative: "n/a",
+          subsystemsTouched: [],
+          coverageFindings: [
+            makeRenamedFileFinding({
+              suggestion: "Wrap the SecItemAdd query with kSecAttrAccessibleAfterFirstUnlock.",
+            }),
+          ],
+          heldCoverageCount: 0,
+        },
+      })
+    );
+    assert.ok(summary.includes("Suggestion: Wrap the SecItemAdd query"));
   });
 
   test("notes held-back low-confidence coverage findings without showing them", () => {

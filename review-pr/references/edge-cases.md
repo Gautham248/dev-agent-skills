@@ -87,7 +87,7 @@ Do not add fragile heuristics to disambiguate identical lines -- surrounding
 context is itself subject to the same shifting-lines problem this design
 avoids for the primary case.
 
-## 2026-07-29 — Cross-review history degrades gracefully when it can't be reconstructed
+## 2026-08-25 — Cross-review history degrades gracefully when it can't be reconstructed
 
 **Condition:** Re-review dedup needs each prior review's original commit SHA
 to resolve that review's comments back to real evidence text. If the API
@@ -99,3 +99,37 @@ CURRENT diff at its ORIGINAL stored line number -- weaker (an inserted line
 above the tracked one will make an unfixed issue look fixed), but fails in
 the direction of "might repeat something already said" rather than "might
 silently skip reviewing." A warning is printed; the review is not blocked.
+
+## 2026-08-25 — A 372-file PR hid three real bugs in pure renames and a race condition in plain sight
+
+**Condition:** A large PR (372 files) relocated existing, unmodified iOS
+and backend services into new package directories. `git diff` emits these
+as pure renames -- zero hunks -- so the line-anchored review pass had
+nothing to anchor a comment to in those files and never read their actual
+content. Separately, in the newly-added backend code, a `findFirst`
+lookup immediately followed by a `create` on the same Prisma model (with a
+`@unique` constraint on the looked-up field) read as ordinary
+look-it-up-then-create-if-missing logic on a normal sequential read --
+the bug only exists under concurrent execution, where two requests can
+both pass the `findFirst` before either commits the `create`.
+
+**Handling:** Four changes, not one -- these were genuinely independent
+gaps, not four symptoms of a single root cause:
+- Step 2b gained a renamed/relocated-file sweep (see
+  `references/renamed-file-sweep.md`): pure renames now get their full
+  current content read and reviewed, with confirmed bugs landing as
+  `type: "renamed-file"` entries in the architecture-review's
+  `coverageFindings`, since they have no diff hunk to anchor a normal
+  finding to.
+- Step 4c's completeness gate gained a fourth mandatory-trace category,
+  `raceReadThenWrite`, triggered by `findFirst`/`findUnique`/`findOne` --
+  see `references/completeness-gate.md` for the full trace bar.
+- `swift-conventions/SKILL.md` gained three platform-runtime rules that
+  share the same shape as the bug above -- syntactically valid Swift that
+  passes a normal read and is still wrong at runtime: per-element
+  `DateFormatter`/`ISO8601DateFormatter` allocation in a mapping loop,
+  Keychain queries omitting `kSecAttrAccessible` (which defaults to
+  `WhenUnlocked` and silently breaks background-triggered access), and
+  bare `try?` on network/database deserialization discarding a failure
+  reason worth logging.
+- This entry itself, per the self-improvement protocol.
