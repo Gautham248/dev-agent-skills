@@ -69,13 +69,17 @@ echo ""
 # which one happened to already be present.
 #
 # This is deliberately a SKILL.md-level mechanism, not just an AGENTS.md
-# rule — AGENTS.md is cross-tool for some harnesses (Codex reads it
-# natively) but not others: Claude Code reads CLAUDE.md, not AGENTS.md
-# (confirmed against Anthropic's docs — the documented pattern is a
-# CLAUDE.md that imports AGENTS.md with `@AGENTS.md`, which is what
+# rule — AGENTS.md is cross-tool for some harnesses (Codex and Command
+# Code both read it natively — confirmed against commandcode.ai/docs/memory
+# for the latter) but not others: Claude Code reads CLAUDE.md, not
+# AGENTS.md (confirmed against Anthropic's docs — the documented pattern is
+# a CLAUDE.md that imports AGENTS.md with `@AGENTS.md`, which is what
 # configure_claude_code_global() below wires up at the user-instructions
 # level). Gemini CLI reads GEMINI.md, not AGENTS.md, per its own docs.
-# Hermes does not appear to read any of them. A SKILL.md-embedded
+# Hermes does not appear to read any of them. Command Code's native
+# AGENTS.md support doesn't make it a Codex-style free ride, though — see
+# configure_command_code_global() below for why it still needs its own
+# import wiring despite reading the same filename. A SKILL.md-embedded
 # instruction is the one thing every harness sees identically, regardless
 # of which memory-file convention it honors. Self-improvement in
 # particular used to be opt-in and described as "Hermes only" (CONTRIBUTING.md's
@@ -438,6 +442,74 @@ configure_claude_code_global() {
 }
 
 configure_claude_code_global
+echo ""
+
+# ── Command Code global config (standing rules import) ────────────────────────
+#
+# Command Code reads AGENTS.md natively (confirmed against
+# commandcode.ai/docs/memory) at three tiers — user (~/.commandcode/AGENTS.md),
+# project (<project>/AGENTS.md or <project>/.commandcode/AGENTS.md), and
+# subdirectory — all loaded, additively. This looks at first glance like it
+# should need no wiring here at all, the way Codex needs none above: Codex
+# and Command Code both read a *project's own* AGENTS.md natively, so a
+# project that already has one just works for both, unaided.
+#
+# The gap is the difference between "reads AGENTS.md" and "reads THIS
+# repo's AGENTS.md". Codex's free ride only covers the case where someone
+# runs it inside a project that already has its own AGENTS.md file — it
+# does nothing for "give every project on this machine this repo's org-wide
+# standing rules by default", which is what configure_opencode_global and
+# configure_claude_code_global above exist to do for their harnesses. A
+# developer running `cmd` inside some OTHER project (Lio, say) would only
+# see that project's own AGENTS.md, if it has one — never this repo's,
+# unless something puts a pointer to it in Command Code's OWN user-tier
+# file, at Command Code's OWN path (~/.commandcode/AGENTS.md), which is
+# necessarily separate from every other harness's user-tier location.
+#
+# Command Code's documented `@path` import syntax inside a memory file
+# (commandcode.ai/docs/memory, "Importing other files with @path") is the
+# same mechanism Claude Code's CLAUDE.md uses above, so the fix is the same
+# shape: a managed import block in the user-tier file, not the harness's
+# own config format (unlike OpenCode, which has no native AGENTS.md support
+# at all and needs a JSON instructions[] entry instead).
+configure_command_code_global() {
+  if ! command -v cmd &>/dev/null && [ ! -d "$HOME/.commandcode" ]; then
+    return  # Command Code isn't installed/used on this machine — nothing to do
+  fi
+
+  # Same reasoning as configure_claude_code_global: import this repo's own
+  # resolved AGENTS.md, not the placeholder-bearing template.
+  local resolved_rules_path="$SKILLS_DIR/AGENTS.md"
+  if [ ! -f "$resolved_rules_path" ]; then
+    echo "  ⚠️  AGENTS.md not found at $resolved_rules_path — skipping Command Code global config."
+    return
+  fi
+
+  local global_dir="$HOME/.commandcode"
+  local agents_md="$global_dir/AGENTS.md"
+  mkdir -p "$global_dir"
+  [ -f "$agents_md" ] || touch "$agents_md"
+
+  local begin="<!-- BEGIN dev-agent-skills standing rules import (managed by setup.sh -- do not edit this block manually; edit config/AGENT-STANDING-RULES.md instead) -->"
+  local end="<!-- END dev-agent-skills standing rules import -->"
+
+  local stripped
+  stripped=$(mktemp)
+  strip_managed_block "$agents_md" "$begin" "$end" > "$stripped"
+
+  {
+    cat "$stripped"
+    echo ""
+    echo "$begin"
+    echo "@$resolved_rules_path"
+    echo "$end"
+  } | cat -s > "$agents_md"
+  rm -f "$stripped"
+
+  echo "  ✓ Command Code global config — $agents_md imports $resolved_rules_path (loads every session, every project, via Command Code's user-tier memory file)"
+}
+
+configure_command_code_global
 echo ""
 
 # ── README skills table ───────────────────────────────────────────────────────
