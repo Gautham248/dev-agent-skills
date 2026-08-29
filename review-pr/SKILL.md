@@ -219,6 +219,25 @@ know about, not something to hide.
 `architecture-context`'s subsystem list or on any `graphify` query you run
 directly in this step.
 
+### Renamed/relocated file sweep
+
+**If the diff contains any pure renames** (`status: "renamed"` with an
+empty anchor set, from Step 1's `parseUnifiedDiff` output) — do this
+before the reasoning pass below, not after. A pure rename has zero diff
+hunks, so nothing in the normal Step 4 lens pass ever looks at its actual
+content; a real bug already living in that file is otherwise invisible to
+this review. Full reasoning: `references/renamed-file-sweep.md`.
+
+For each such file: read its full current content from the checked-out
+tree (not the diff — the diff is empty), resolve which lenses apply to its
+path the same way Step 3 does, and review it with those lenses plus
+`first-principles-review`'s trace-don't-read methodology, the same rigor
+as any other file. A confirmed issue (not a maybe) becomes a
+`type: "renamed-file"` entry in this step's `coverageFindings` array,
+alongside any subsystem-coverage entries below — set `severity`
+explicitly (`blocker`/`should`/`nit`) so a real bug gets the same
+blocker-escalation treatment a normal finding would.
+
 ### Reasoning pass
 
 You now have: the subsystems `architecture-context` says this PR's changed
@@ -249,14 +268,28 @@ Write this out as JSON:
       "subsystem": "state-sync",
       "rationale": "Concrete, specific -- same bar as a Step 4 finding's rationale.",
       "confidence": 0.75
+    },
+    {
+      "type": "renamed-file",
+      "file": "packages/backend/src/services/nudges.service.ts",
+      "severity": "should",
+      "rationale": "Concrete, specific -- what's actually wrong, found by reading the full relocated file, same bar as a Step 4 finding.",
+      "confidence": 0.85
     }
   ]
 }
 ```
 
+`coverageFindings` holds both shapes in one array, discriminated by
+`type` -- a `"coverage"` entry names a subsystem the PR plausibly should
+touch but doesn't; a `"renamed-file"` entry is a confirmed bug found by
+the renamed-file sweep above, in a file with no diff hunk to anchor a
+normal finding to.
+
 Zero `coverageFindings` is a completely normal, valid outcome -- it means
-the PR touches what a feature like this should touch. Do not manufacture a
-finding to avoid an empty list.
+the PR touches what a feature like this should touch, and the renamed-file
+sweep (if it ran) found nothing. Do not manufacture a finding to avoid an
+empty list.
 
 Save this to `/tmp/architecture-review-<number>.json`. Validate it:
 
@@ -342,7 +375,7 @@ validator in Step 5 rejects it on precisely that basis.
 
 `first-principles-review`'s own "trace, don't read" methodology already
 says to git-grep every caller and trace every write path -- this step
-makes three specific categories of that tracing **mandatory**, not
+makes four specific categories of that tracing **mandatory**, not
 advisory, since a single fresh pass over a large diff can otherwise simply
 not get to every candidate. Full reasoning: `references/completeness-gate.md`.
 
@@ -375,12 +408,27 @@ For every candidate in `resourceCreate`: trace every exit path (normal,
 early return, error, disconnect/unmount) and confirm a matching cleanup
 call exists on each one.
 
+For every candidate in `raceReadThenWrite`: this flags a `findFirst`/
+`findUnique`/`findOne` call -- the read half of a read-then-write pattern
+that's race-prone if a matching write follows with no atomic guard. Trace:
+does the enclosing function follow this read with a `create`/`insert` on
+the *same model*? If so, is the pair wrapped in a transaction, or better,
+replaced entirely with the ORM's atomic `upsert`? A `findFirst` used purely
+for a lookup with no subsequent write on the same model is not a bug --
+this category over-triggers on purpose, same as the other three; the trace
+determines whether it's real. When it is real, check whether the field
+being matched on actually has a `@unique`/unique-index constraint in the
+schema -- without one, the failure mode is a silent duplicate row rather
+than a thrown constraint violation, which changes the fix (add the
+constraint, not just the upsert) and the severity (data corruption, not
+just a transient 500).
+
 A confirmed gap becomes a normal finding -- same pipeline, `lens:
 "completeness-gate"`, passes Step 5's `validateFinding` unchanged. A
 confirmed-clean trace produces no finding but gets counted
-(`{ stateMutation: n, identity: n, resourceCleanup: n }`) for Step 9's
-summary, so a clean run is provable, not indistinguishable from a gate
-that silently didn't run.
+(`{ stateMutation: n, identity: n, resourceCleanup: n, raceReadThenWrite: n }`)
+for Step 9's summary, so a clean run is provable, not indistinguishable
+from a gate that silently didn't run.
 
 ## Step 5 -- Validate, dedupe, suppress
 

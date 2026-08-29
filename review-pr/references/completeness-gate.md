@@ -32,10 +32,25 @@ timer/socket-heavy codebase: a handle created (`setTimeout`, `.on(...)`)
 without a traceable cleanup (`clearTimeout`, `.off(...)`) on every exit
 path a function can take, not just the one shown in the diff hunk.
 
+A fourth, confirmed in a real review: a `findFirst` (or `findUnique`)
+check immediately followed by a `create` on the same model, guarding it as
+if the check made the create safe. Read sequentially, this looks like
+ordinary "look it up, create it if missing" logic and passes a normal
+review pass cleanly -- the bug only exists under concurrent execution,
+where two requests can both pass the `findFirst` (neither sees the other's
+row, because neither has written yet) before either reaches `create`. On a
+model with a unique constraint on the looked-up field, the second `create`
+then throws a constraint violation the caller usually isn't prepared for;
+without the constraint, it silently inserts a duplicate row instead. This
+is not a hypothetical -- it was the actual root cause of two of the misses
+that motivated adding this category (a tag-resolution helper and a
+"get-or-create today's occurrence" helper, both racing on their own
+`findFirst` before their own `create`).
+
 ## What the trigger regexes do and don't do
 
 `findCompletenessCandidates` (review-lib.mjs) scans every added line
-against three keyword regexes. This is deliberately coarse pattern
+against four keyword/pattern regexes. This is deliberately coarse pattern
 matching, not real static analysis — it decides **where a trace is
 mandatory**, never **whether something is actually a bug**. That
 determination requires reading the real function body and its callers,
@@ -54,7 +69,7 @@ PR as easily as a 68-file one. A PR that matches nothing produces three
 empty candidate lists and the gate is a genuine no-op — the cost only
 shows up when there's something to trace.
 
-## The three categories
+## The four categories
 
 **State-mutation completeness.** Keyword regex:
 `/\b(score|balance|points?|credits?|totalScore|amount)\b/i`. For each
@@ -88,6 +103,25 @@ the enclosing function or component lifecycle (normal completion, early
 return, error throw, disconnect/unmount) and confirm a matching cleanup
 call exists on each one — not just the happy path the diff hunk shows.
 
+**Race-prone read-then-write.** Trigger regex:
+`/\b\w+\.(findFirst|findUnique|findOne)\s*\(/`. This flags only the READ
+half — the WRITE half (a same-model `create`/`insert`) and the presence or
+absence of an atomic guard are what the trace determines, not the regex.
+For each candidate: find the enclosing function, and check whether it (or
+a caller it delegates to) follows the read with a `create`/`insert` call
+against the *same model*. If it does, check whether that pair is wrapped
+in a transaction or, better, replaced with the ORM's atomic `upsert`
+primitive (Prisma: `upsert`; most ORMs have an equivalent). If there's no
+atomic guard, this is a real concurrency bug — under simultaneous
+requests, both can pass the read before either commits the write. Also
+check the schema for a unique constraint on the field being matched: with
+one, the second write throws (a 500 the caller likely doesn't handle);
+without one, it silently inserts a duplicate row, which is a data-integrity
+bug, not just a reliability one, and should be flagged at higher severity.
+A `findFirst`/`findUnique` with no subsequent same-model write is a normal
+read and not a finding — this regex is intentionally broad, same
+philosophy as the other three.
+
 ## Using architecture-context's subsystem tags
 
 If Step 2b ran, `expandCandidatesWithSubsystems` widens the state-mutation
@@ -110,7 +144,8 @@ existing `validateFinding` unchanged, same as a Step 1b compiler finding.
 
 A confirmed-clean trace produces **no finding** — absence of a bug isn't a
 finding — but must still be counted. Track
-`{ stateMutation: n, identity: n, resourceCleanup: n }` (candidates
+`{ stateMutation: n, identity: n, resourceCleanup: n, raceReadThenWrite: n }`
+(candidates
 examined, per category) for Step 9's summary, so a clean gate run is
 provable ("N candidates traced, 0 gaps") rather than indistinguishable
 from a gate that silently didn't run at all.
