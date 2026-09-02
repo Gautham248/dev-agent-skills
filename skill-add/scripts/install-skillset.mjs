@@ -40,11 +40,12 @@ import {
   walkTextFiles,
   hashDir,
 } from "../../scripts/skill-lib.mjs";
+import { scanSkillDir, isBlocking, formatFinding } from "./scan-skillset.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function parseArgs(argv) {
-  const args = { only: null, prefix: null, subdir: "", dryRun: false };
+  const args = { only: null, prefix: null, subdir: "", dryRun: false, allowUnsafe: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--clone-dir") args.cloneDir = argv[++i];
@@ -56,6 +57,7 @@ function parseArgs(argv) {
     else if (a === "--prefix") args.prefix = argv[++i] || null;
     else if (a === "--only") args.only = (argv[++i] || "").split(",").map((s) => s.trim()).filter(Boolean);
     else if (a === "--dry-run") args.dryRun = true;
+    else if (a === "--allow-unsafe") args.allowUnsafe = true;
     else if (a === "--result-file") args.resultFile = argv[++i];
   }
   for (const required of ["cloneDir", "skillsDir", "repoUrl", "commit"]) {
@@ -164,6 +166,50 @@ function main() {
 
   console.log(`Found ${candidates.length} skill(s) in the source repo; importing ${imported.length}, skipping ${skipped.length}.`);
 
+  // ---- Pass 1.5: security scan ----
+  // Runs against the SOURCE clone (s.skillDir), not the not-yet-created
+  // destination (s.destDir) — deliberately placed before the dry-run
+  // early-exit below so --dry-run gives an honest preview of whether an
+  // import would be blocked, not just what would be copied. Every
+  // candidate in `imported` is scanned regardless of dry-run, since this
+  // is read-only and doesn't touch the filesystem either way.
+  //
+  // Blocking (critical/high) findings halt the import — this is untrusted
+  // content from an external git repo about to be symlinked into every
+  // developer's live agent harness via setup.sh, so the same "surface
+  // loudly, never silently proceed" convention this script already
+  // applies to unresolved cross-reference warnings applies here with a
+  // hard stop instead of just a warning. --allow-unsafe is the deliberate
+  // human override for a reviewed false positive — same shape as
+  // --skip-setup: never silently bypassed, always explicit.
+  const securityFindings = [];
+  for (const s of imported) {
+    const findings = scanSkillDir(s.skillDir).map((f) => ({ ...f, skill: s.finalName }));
+    securityFindings.push(...findings);
+  }
+  const blockingFindings = securityFindings.filter(isBlocking);
+  const warningFindings = securityFindings.filter((f) => !isBlocking(f));
+
+  if (securityFindings.length) {
+    console.log(`\n${blockingFindings.length ? "✗" : "⚠"} Security scan: ${blockingFindings.length} blocking, ${warningFindings.length} warning finding(s).`);
+    for (const f of blockingFindings) console.log(formatFinding(f));
+    for (const f of warningFindings) console.log(formatFinding(f));
+  }
+
+  if (blockingFindings.length && !args.allowUnsafe) {
+    console.log(`\n✗ Import blocked by ${blockingFindings.length} security finding(s) — see above.`);
+    console.log(`  Review the findings. If they're false positives, re-run with --allow-unsafe after manual review.`);
+    console.log(`  Nothing was written.`);
+    if (args.resultFile) {
+      fs.writeFileSync(args.resultFile, JSON.stringify({
+        repoUrl: args.repoUrl, subdir: args.subdir || null, prefix: args.prefix || null,
+        commit: args.commit, anyChanged: false, blockedBySecurityScan: true,
+        securityFindings,
+      }, null, 2), "utf8");
+    }
+    process.exit(1);
+  }
+
   if (args.dryRun) {
     console.log("\n--dry-run: would import:");
     for (const s of imported) console.log(`  ${s.isUpdate ? "update" : "new   "}  ${s.relFromSearchRoot}  ->  ${s.finalName}/`);
@@ -174,6 +220,7 @@ function main() {
         commit: args.commit, anyChanged: null, dryRun: true,
         imported: imported.map((s) => ({ finalName: s.finalName, isUpdate: s.isUpdate })),
         skipped: skipped.map((s) => ({ baseName: s.baseName, reason: s.reason })),
+        securityFindings,
       }, null, 2), "utf8");
     }
     process.exit(0);
@@ -280,6 +327,16 @@ function main() {
     prefix: args.prefix || null,
     imported_skills: imported.map((s) => ({ final_name: s.finalName, source_path: s.relFromSearchRoot })),
     installed_at: now,
+    // Provenance of the security scan outcome for this install, not just
+    // the fact that it happened — a future reader of .skillsets.json (or
+    // a future skill-update run refreshing this same source) should be
+    // able to tell, without re-scanning, whether a human already
+    // overrode a blocking finding for this exact source.
+    security_scan: {
+      warning_count: warningFindings.length,
+      blocking_count: blockingFindings.length,
+      allowed_unsafe: blockingFindings.length > 0 && args.allowUnsafe,
+    },
   };
   // If this exact (repo, subdir, prefix) combo was already in the manifest,
   // update that entry in place rather than appending a duplicate history row.

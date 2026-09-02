@@ -103,7 +103,15 @@ guard let user = users[id] else {
   outcome (`Dictionary` subscript, `first(where:)`) — not every failure is
   an error.
 - `try?` discards the error entirely — only use it when the caller truly
-  doesn't need to know *why* it failed.
+  doesn't need to know *why* it failed. **On a network/database
+  deserialization call specifically, bare `try?` is a real diagnosability
+  problem, not just a style preference** — a malformed API response fails
+  silently with no trace of what was actually wrong, which turns a
+  five-minute log-read into a from-scratch repro. Prefer `do { ... } catch
+  { logger.debug("...: \(error)"); return nil }` (or the `throws`
+  equivalent) over a bare `try?` wherever the failure reason has any
+  debugging value — which for a decode of external/untrusted data, it
+  almost always does.
 - `try!` asserts infallibility and crashes if wrong — treat it like
   force-unwrap. Reserve it for cases genuinely provably infallible (a regex
   literal known-valid at compile time); prefer `try?` or `do`/`catch`
@@ -122,6 +130,73 @@ func parse(_ json: [String: Any]) throws -> Profile {
     // ...
 }
 ```
+
+### Formatters and other expensive-to-instantiate Foundation types
+
+`DateFormatter`, `ISO8601DateFormatter`, and `NumberFormatter` are
+genuinely expensive to construct — their initializers do real work
+(locale/calendar/timezone resolution), not cheap struct setup. Code that
+allocates one of these **inside a function body that runs per-element**
+(a `map`/`forEach` closure, a loop body, a hot parsing path) pays that
+construction cost on every call, which is easy to miss because it's
+syntactically valid, correctly-behaving Swift — the bug is a performance
+one, not a correctness one, so it doesn't show up in tests or a normal
+read of the diff.
+
+- Hoist the formatter to a `static let` (or an instance property that
+  outlives the loop) instead of instantiating it inside the loop/closure
+  body. `static let` is lazily initialized and thread-safe by construction
+  in Swift, so this is strictly better than a loop-local instance, not
+  just faster.
+- `DateFormatter`/`NumberFormatter` instances are not safe to share across
+  threads if mutated concurrently (changing `.dateFormat` etc. after
+  creation) — a single shared `static let` used read-only (configured once,
+  never mutated after) is fine; a shared *mutable-configuration* formatter
+  touched from multiple threads is not.
+
+```swift
+// No — constructs a new ISO8601DateFormatter on every element
+let dates = strings.map { ISO8601DateFormatter().date(from: $0) }
+
+// Yes — one instance, reused
+enum LioDate {
+    static let iso8601 = ISO8601DateFormatter()
+    static func parse(_ strings: [String]) -> [Date?] {
+        strings.map { iso8601.date(from: $0) }
+    }
+}
+```
+
+### Keychain accessibility
+
+Every `SecItemAdd`/`SecItemUpdate` query dictionary should set
+`kSecAttrAccessible` **explicitly** — don't rely on the implicit default.
+Confirmed against Apple's own documentation and forum guidance rather than
+assumed: the SDK's default when the attribute is omitted is
+`kSecAttrAccessibleWhenUnlocked`, which is reasonably secure but has a
+specific, easy-to-miss failure mode: it makes the item **inaccessible
+whenever the device is locked**, including during background execution.
+
+- **If the item needs to be read during background work** (a background
+  App Refresh task, a silent-push-triggered CloudKit sync, anything that
+  can run while the device is locked) — `kSecAttrAccessibleWhenUnlocked`
+  (the default) will make that background work fail whenever it happens to
+  run while the device is locked. Use an `AfterFirstUnlock` variant
+  instead, which stays accessible from first unlock after boot until the
+  next reboot, including while subsequently locked.
+- **Prefer the `ThisDeviceOnly` variants** (`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`,
+  `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`) unless the item
+  genuinely needs to travel via iCloud Keychain sync or an encrypted device
+  backup/restore — most app-specific credentials (an auth session token, a
+  local encryption key) don't need that portability and are safer without
+  it.
+- **Never use `kSecAttrAccessibleAlways`** (accessible even when the
+  device is locked, deprecated) — there's no legitimate reason for new code
+  to reach for it over an `AfterFirstUnlock` variant.
+- The choice isn't one-size-fits-all — state which level a given Keychain
+  item uses and why (background-availability need vs. sync/backup need) in
+  review, rather than treating "some `kSecAttrAccessible` value is present"
+  as sufficient on its own.
 
 ### Value vs reference types
 

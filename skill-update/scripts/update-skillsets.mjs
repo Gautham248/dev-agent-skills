@@ -39,13 +39,14 @@ const SETUP_SH = path.join(SKILLS_DIR, "setup.sh");
 const MANIFEST_PATH = path.join(SKILLS_DIR, ".skillsets.json");
 
 function parseArgs(argv) {
-  const args = { source: null, dryRun: false, skipSetup: false, includeNew: false };
+  const args = { source: null, dryRun: false, skipSetup: false, includeNew: false, allowUnsafe: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--source") args.source = argv[++i];
     else if (a === "--dry-run") args.dryRun = true;
     else if (a === "--skip-setup") args.skipSetup = true;
     else if (a === "--include-new") args.includeNew = true;
+    else if (a === "--allow-unsafe") args.allowUnsafe = true;
     else if (a === "-h" || a === "--help") {
       printHelp();
       process.exit(0);
@@ -70,6 +71,12 @@ Options:
   --dry-run               Check for upstream changes and report them without
                           touching the filesystem.
   --skip-setup            Don't run setup.sh at the end even if something changed.
+  --allow-unsafe          Apply a refresh even if the security scan finds
+                          critical/high-severity issues in the updated content.
+                          A source that was clean at install time can still be
+                          compromised later — this override exists for the same
+                          reason install-skillset.sh has one, and should be used
+                          just as sparingly, after reading the findings.
 `);
 }
 
@@ -154,12 +161,30 @@ function main() {
     if (entry.ref) nodeArgs.push("--ref", entry.ref);
     if (only) nodeArgs.push("--only", only.join(","));
     if (args.dryRun) nodeArgs.push("--dry-run");
+    if (args.allowUnsafe) nodeArgs.push("--allow-unsafe");
 
     try {
       execFileSync(process.execPath, nodeArgs, { stdio: "inherit" });
     } catch (e) {
-      console.log(`✗ ${label} — install-skillset.mjs failed: ${e.message.split("\n")[0]}`);
-      report.push({ entry, label, error: true });
+      // install-skillset.mjs exits 1 for two different reasons: a security
+      // scan block, or a genuine script error. It writes --result-file
+      // before exiting either way, so check that first rather than
+      // reporting every non-zero exit as an undifferentiated "failed" —
+      // a source that scanned clean at install time but is now flagged is
+      // meaningfully different from a broken clone or a script crash, and
+      // the person running this needs to know which one happened.
+      let blockedResult = null;
+      if (fs.existsSync(resultFile)) {
+        try { blockedResult = JSON.parse(fs.readFileSync(resultFile, "utf8")); } catch { /* leave null */ }
+      }
+      if (blockedResult?.blockedBySecurityScan) {
+        console.log(`✗ ${label} — refresh blocked: the updated content now has ${blockedResult.securityFindings.length} security finding(s) that weren't there before (or weren't overridden). Re-run with --allow-unsafe after reviewing, or leave this skillset at its current pinned commit.`);
+        report.push({ entry, label, securityBlocked: true, result: blockedResult });
+      } else {
+        console.log(`✗ ${label} — install-skillset.mjs failed: ${e.message.split("\n")[0]}`);
+        report.push({ entry, label, error: true });
+      }
+      if (fs.existsSync(resultFile)) fs.rmSync(resultFile, { force: true });
       fs.rmSync(cloned.dir, { recursive: true, force: true });
       continue;
     }
@@ -179,7 +204,9 @@ function main() {
   console.log("\n" + "─".repeat(60));
   console.log("Update summary:");
   for (const r of report) {
-    if (r.error) {
+    if (r.securityBlocked) {
+      console.log(`  ✗ ${r.label} — blocked by security scan (${r.result?.securityFindings?.length ?? "?"} finding(s)); not refreshed`);
+    } else if (r.error) {
       console.log(`  ✗ ${r.label} — failed, see above`);
     } else if (r.upToDate) {
       console.log(`  =  ${r.label} — already up to date`);

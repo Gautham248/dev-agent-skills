@@ -57,6 +57,7 @@ Only use the flags below when the user explicitly names them in their request:
 | Also pick up new upstream skills | `--include-new` (default: only refresh what's already here) |
 | Preview without writing | `--dry-run` |
 | Skip `setup.sh` at the end | `--skip-setup` |
+| Proceed despite a security-scan block | `--allow-unsafe` — only pass this if the user explicitly reviewed a reported finding and asked to override it; never add it preemptively. |
 
 If the user already specified which skillset or what flags in their request,
 use them.
@@ -76,7 +77,13 @@ The script will, for each tracked skillset:
 3. If same commit and `--include-new` not set, report "already up to date".
 4. If different commit (or `--include-new` forces re-check), re-run the
    install skill with the original parameters (`--subdir`, `--prefix`, `--only`
-   list) reconstructed from `.skillsets.json`.
+   list) reconstructed from `.skillsets.json`. This includes the same
+   security scan `skill-add` runs on a first install — a source that was
+   clean before can be compromised upstream since then, so every refresh
+   is scanned again, not just the initial pull. A critical/high finding
+   blocks that skillset's refresh (the locally-tracked, previously-safe
+   commit stays in place) unless `--allow-unsafe` was passed; other
+   tracked skillsets in the same run are unaffected and continue normally.
 5. Compare content hashes — skills whose content is identical after re-import
    are reported "unchanged"; only actually-changed skills show as "updated".
 6. Run `bash setup.sh` once at the end if anything changed (unless
@@ -108,6 +115,13 @@ If `--dry-run` was used, make it clear nothing was written and show what
 If a source repo failed to clone or the install step errored for a particular
 skillset, report the failure but continue with the remaining skillsets.
 
+If a skillset's refresh was blocked by the security scan, this is reported
+separately from an ordinary failure (`✗ <label> — blocked by security scan`,
+not `✗ <label> — failed`) — relay the findings in full and mention
+`--allow-unsafe` as the override without using it yourself. The previously-
+installed, previously-safe version of that skillset is left untouched either
+way; only the refresh was declined.
+
 ## What the agent must NEVER do
 
 - Run `git clone` or `git pull` manually — the script handles cloning.
@@ -118,6 +132,8 @@ skillset, report the failure but continue with the remaining skillsets.
 - Commit or push automatically — the user does that after review.
 - Pass `--include-new` unless the user explicitly asked for it (default is
   "only refresh what's already here").
+- Pass `--allow-unsafe` on the user's own initiative after a block — report
+  the findings and let the user decide, the same rule `skill-add` follows.
 - Use this skill to install a brand-new skillset — refer the user to
   `skill-add` instead.
 
@@ -131,4 +147,5 @@ skillset, report the failure but continue with the remaining skillsets.
 | `--source` matches nothing | Print the list of tracked sources and stop. |
 | Source repo fails to clone | Report the error for that skillset and continue to the next one. |
 | Install step fails for one skillset | Report the error for that skillset and continue to the next one. |
+| Security scan blocks a skillset's refresh | Report it distinctly from a generic failure. The previously-tracked commit stays installed; other skillsets in the same run continue normally. Mention `--allow-unsafe`, don't use it. |
 | Nothing changed after re-import | The script reports "content identical" — no setup.sh re-run needed. |

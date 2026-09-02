@@ -791,14 +791,42 @@ export function shouldRunArchitectCheck({
  * exactly those grounds, correctly, since those fields mean something
  * different for a line comment. This is the parallel, deliberately smaller
  * check: just enough structure that renderSummary can trust it.
+ *
+ * Two finding shapes share this validator, discriminated by `type`:
+ *
+ * - `type: "coverage"` — a subsystem this PR plausibly should touch but
+ *   doesn't. Requires `subsystem`. No `file`/`line`, since there's no
+ *   file to point at.
+ * - `type: "renamed-file"` — a CONFIRMED bug found by reading a renamed/
+ *   relocated file's full current content (Step 2b's renamed-file sweep,
+ *   see references/renamed-file-sweep.md), in a file that has zero
+ *   anchorable diff lines to hang a normal finding on. Requires `file`.
+ *   Unlike a coverage finding (an educated guess about missing work),
+ *   this is a real bug the agent has already confirmed by reading the
+ *   file — so it carries the same `severity` vocabulary as a normal
+ *   finding (`blocker`/`should`/`nit`, default `"should"` if omitted) and
+ *   gets the same blocker-escalates-regardless-of-confidence treatment in
+ *   `partitionByConfidence`.
  */
 export function validateCoverageFinding(finding) {
   const errors = [];
   const f = finding || {};
 
-  if (f.type !== "coverage") errors.push('`type` must be "coverage"');
-  if (!f.subsystem || typeof f.subsystem !== "string" || f.subsystem.trim() === "") {
-    errors.push("missing `subsystem`");
+  if (f.type !== "coverage" && f.type !== "renamed-file") {
+    errors.push('`type` must be "coverage" or "renamed-file"');
+  }
+  if (f.type === "coverage") {
+    if (!f.subsystem || typeof f.subsystem !== "string" || f.subsystem.trim() === "") {
+      errors.push("missing `subsystem`");
+    }
+  }
+  if (f.type === "renamed-file") {
+    if (!f.file || typeof f.file !== "string" || f.file.trim() === "") {
+      errors.push("missing `file`");
+    }
+    if (f.severity !== undefined && !["blocker", "should", "nit"].includes(f.severity)) {
+      errors.push('`severity` must be "blocker", "should", or "nit" if present');
+    }
   }
   if (!f.rationale || typeof f.rationale !== "string" || f.rationale.trim().length < 15) {
     errors.push("`rationale` must explain why the omission is suspicious, not just name the subsystem");
@@ -812,23 +840,27 @@ export function validateCoverageFinding(finding) {
 
 /**
  * Two lens passes (or two runs of the architect check within the same
- * session) can independently flag the same subsystem. Keep one entry per
- * subsystem, preferring the higher-confidence rationale — unlike
- * dedupeFindings, there's no anchor to merge multiple lenses onto, so this
- * doesn't accumulate a confidence boost from corroboration the way
- * dedupeFindings does; it just picks the stronger of the two.
+ * session) can independently flag the same subsystem or the same renamed
+ * file. Keep one entry per (subsystem or file), preferring the
+ * higher-confidence rationale — unlike dedupeFindings, there's no anchor
+ * to merge multiple lenses onto, so this doesn't accumulate a confidence
+ * boost from corroboration the way dedupeFindings does; it just picks the
+ * stronger of the two. Coverage and renamed-file findings dedupe on
+ * separate keyspaces (a subsystem name and a file path could coincide by
+ * accident) since they answer different questions.
  */
 export function dedupeCoverageFindings(findings) {
-  const bySubsystem = new Map();
+  const byKey = new Map();
   for (const f of findings) {
-    const key = String(f.subsystem || "").trim().toLowerCase();
-    if (!key) continue;
-    const existing = bySubsystem.get(key);
+    const keyBase = f.type === "renamed-file" ? f.file : f.subsystem;
+    const key = `${f.type}:${String(keyBase || "").trim().toLowerCase()}`;
+    if (!keyBase) continue;
+    const existing = byKey.get(key);
     if (!existing || f.confidence > existing.confidence) {
-      bySubsystem.set(key, f);
+      byKey.set(key, f);
     }
   }
-  return [...bySubsystem.values()];
+  return [...byKey.values()];
 }
 
 // ---------------------------------------------------------------------------
@@ -859,17 +891,31 @@ export const STATE_MUTATION_KEYWORD_RE = /\b(scor\w*|balanc\w*|points?|credits?|
 export const IDENTITY_KEYWORD_RE = /\b(clientId|sessionId|userId|adminId|isAdmin|token)\b/i;
 export const RESOURCE_CREATE_RE = /\b(setTimeout|setInterval)\s*\(|\.on\(|addEventListener\(|\.subscribe\(/;
 export const RESOURCE_CLEANUP_RE = /clearTimeout\(|clearInterval\(|\.off\(|removeEventListener\(|\.unsubscribe\(/;
+/**
+ * A read-then-write pair on a uniquely-constrained record is race-prone
+ * under concurrent requests: two callers can both pass the read before
+ * either has written, and the second write then violates the unique
+ * constraint (or, without one, silently duplicates a row). This regex
+ * flags the READ half only -- `findFirst`/`findUnique` (Prisma) and
+ * `findOne` (Mongoose/TypeORM-style) -- since that's the half that's
+ * syntactically valid and easy to miss reading sequentially; the trace
+ * step below is what actually confirms whether it's paired with a
+ * same-model create with no atomic guard. See
+ * references/completeness-gate.md for the confirmed miss that motivated
+ * adding this category.
+ */
+export const RACE_READ_THEN_WRITE_RE = /\b\w+\.(findFirst|findUnique|findOne)\s*\(/;
 
 /**
- * Scans every added line in the diff against the three trigger regexes.
+ * Scans every added line in the diff against the four trigger regexes.
  * Pure and cheap -- runs on every review, not gated behind Step 2b's
  * broad-PR threshold, since a state-mutation or identity bug can exist in
  * a 3-file PR as easily as a 68-file one. A PR that matches nothing
- * produces three empty arrays and the gate is a genuine no-op, not a
+ * produces four empty arrays and the gate is a genuine no-op, not a
  * skipped check -- the cost only shows up when there's something to trace.
  */
 export function findCompletenessCandidates(files) {
-  const result = { stateMutation: [], identity: [], resourceCreate: [] };
+  const result = { stateMutation: [], identity: [], resourceCreate: [], raceReadThenWrite: [] };
   for (const file of files || []) {
     for (const anchor of file.anchors.values()) {
       if (anchor.side !== "RIGHT" || anchor.kind !== "added") continue;
@@ -883,10 +929,14 @@ export function findCompletenessCandidates(files) {
       if (RESOURCE_CREATE_RE.test(text)) {
         result.resourceCreate.push({ file: file.path, line: anchor.line, text });
       }
+      if (RACE_READ_THEN_WRITE_RE.test(text)) {
+        result.raceReadThenWrite.push({ file: file.path, line: anchor.line, text });
+      }
     }
   }
   return result;
 }
+
 
 /**
  * Widens candidates using architecture-context's subsystem summaries, when
@@ -907,6 +957,7 @@ export function expandCandidatesWithSubsystems(candidates, subsystems) {
     stateMutation: [...candidates.stateMutation],
     identity: [...candidates.identity],
     resourceCreate: [...candidates.resourceCreate],
+    raceReadThenWrite: [...(candidates.raceReadThenWrite || [])],
   };
 
   for (const [id, entry] of Object.entries(subsystems || {})) {
@@ -1307,11 +1358,11 @@ export function renderSummary({
   // lens "completeness-gate" — this line is purely "here's what was
   // checked," not a duplicate report of what was found.
   if (completenessChecks) {
-    const { stateMutation = 0, identity = 0, resourceCleanup = 0 } = completenessChecks;
-    if (stateMutation || identity || resourceCleanup) {
+    const { stateMutation = 0, identity = 0, resourceCleanup = 0, raceReadThenWrite = 0 } = completenessChecks;
+    if (stateMutation || identity || resourceCleanup || raceReadThenWrite) {
       out.push(
         `_Completeness gate: ${stateMutation} state-mutation, ${identity} identity, ` +
-          `${resourceCleanup} resource-cleanup candidate(s) traced._`
+          `${resourceCleanup} resource-cleanup, ${raceReadThenWrite} race-condition candidate(s) traced._`
       );
       out.push("");
     }
@@ -1334,7 +1385,8 @@ export function renderSummary({
       out.push(`**Subsystems touched:** ${architectureReview.subsystemsTouched.join(", ")}`);
       out.push("");
     }
-    const coverageFindings = architectureReview.coverageFindings || [];
+    const coverageFindings = (architectureReview.coverageFindings || []).filter((f) => f.type !== "renamed-file");
+    const renamedFileFindings = (architectureReview.coverageFindings || []).filter((f) => f.type === "renamed-file");
     if (coverageFindings.length) {
       out.push("**Possibly missing:**");
       out.push("");
@@ -1346,6 +1398,18 @@ export function renderSummary({
       out.push(
         "_No coverage gaps flagged — the subsystems this PR would plausibly need all appear to be touched._"
       );
+      out.push("");
+    }
+    if (renamedFileFindings.length) {
+      out.push(
+        "**Findings in renamed/relocated files** (confirmed by reading the full file — no diff hunk exists to anchor an inline comment to):"
+      );
+      out.push("");
+      for (const f of renamedFileFindings) {
+        const severityTag = f.severity ? `${f.severity}, ` : "";
+        out.push(`- **${f.file}** (${severityTag}${Math.round(f.confidence * 100)}% confidence) — ${f.rationale.trim()}`);
+        if (f.suggestion) out.push(`  Suggestion: ${f.suggestion.trim()}`);
+      }
       out.push("");
     }
     if (architectureReview.heldCoverageCount) {

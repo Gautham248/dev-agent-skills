@@ -138,7 +138,7 @@ function runCoverageValidation(raw) {
   for (const f of findings) {
     const r = validateCoverageFinding(f);
     if (r.ok) valid.push(f);
-    else console.error(`⚠ dropping invalid coverage finding (${f?.subsystem || "?"}): ${r.errors.join("; ")}`);
+    else console.error(`⚠ dropping invalid coverage finding (${f?.subsystem || f?.file || "?"}): ${r.errors.join("; ")}`);
   }
   const merged = dedupeCoverageFindings(valid);
   const { post, held } = partitionByConfidence(merged);
@@ -339,7 +339,7 @@ function cmdPost(a) {
 
   const preExistingCompileErrors = readJsonFlag(a["pre-existing-compile-errors"], "pre-existing-compile-errors", { kind: "array", shapeHint: "{ file, line, message }" }) || [];
   const siblingContext = readJsonFlag(a["sibling-context"], "sibling-context", { kind: "object", shapeHint: "{ generalCommentCount, siblingPr }" });
-  const completenessChecks = readJsonFlag(a["completeness-checks"], "completeness-checks", { kind: "object", shapeHint: "{ stateMutation, identity, resourceCleanup }" });
+  const completenessChecks = readJsonFlag(a["completeness-checks"], "completeness-checks", { kind: "object", shapeHint: "{ stateMutation, identity, resourceCleanup, raceReadThenWrite }" });
 
   if (invalid.length) {
     die(
@@ -574,9 +574,9 @@ function cmdPost(a) {
       if (bits.length) console.log(`  context considered: ${bits.join(", ")}`);
     }
     if (completenessChecks) {
-      const { stateMutation = 0, identity = 0, resourceCleanup = 0 } = completenessChecks;
+      const { stateMutation = 0, identity = 0, resourceCleanup = 0, raceReadThenWrite = 0 } = completenessChecks;
       console.log(
-        `  completeness gate: ${stateMutation} state-mutation, ${identity} identity, ${resourceCleanup} resource-cleanup candidate(s) traced`
+        `  completeness gate: ${stateMutation} state-mutation, ${identity} identity, ${resourceCleanup} resource-cleanup, ${raceReadThenWrite} race-condition candidate(s) traced`
       );
     }
     console.log("");
@@ -767,7 +767,7 @@ else {
            finding.
 
            --completeness-checks points at a JSON object
-           { stateMutation, identity, resourceCleanup } — candidate counts
+           { stateMutation, identity, resourceCleanup, raceReadThenWrite } — candidate counts
            from Step 4c's mandatory gate. Rendered as a one-line count so a
            clean gate run is provable, not silently indistinguishable from
            a gate that didn't run. Any actual gap Step 4c found is already
