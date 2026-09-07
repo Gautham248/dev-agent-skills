@@ -715,4 +715,40 @@ describe("review-cli.mjs plan — real lens-registry.json, real skills-root", ()
     assert.equal(status, 0);
     assert.match(stdout, /revenuecat-conventions: no changed file matches applies_to/);
   });
+
+  test("a PR touching schema.zmodel selects zenstack-conventions", () => {
+    const diff = [
+      "diff --git a/packages/backend/schema.zmodel b/packages/backend/schema.zmodel",
+      "index 1111111..2222222 100644",
+      "--- a/packages/backend/schema.zmodel",
+      "+++ b/packages/backend/schema.zmodel",
+      "@@ -10,3 +10,6 @@",
+      "+model SpaceUser {",
+      "+    role String",
+      "+    @@allow('create', space.members?[user == auth() && role == 'ADMIN'])",
+      "+}",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /62\s+zenstack-conventions/);
+  });
+
+  test("an unrelated TypeScript route file does not select zenstack-conventions", () => {
+    const diff = [
+      "diff --git a/packages/backend/src/routes/tasks.ts b/packages/backend/src/routes/tasks.ts",
+      "new file mode 100644",
+      "index 0000000..8888888",
+      "--- /dev/null",
+      "+++ b/packages/backend/src/routes/tasks.ts",
+      "@@ -0,0 +1,1 @@",
+      "+export function listTasks() {}",
+      "",
+    ].join("\n");
+
+    const { stdout, status } = planForDiff(diff);
+    assert.equal(status, 0);
+    assert.match(stdout, /zenstack-conventions: no changed file matches applies_to/);
+  });
 });
