@@ -36,6 +36,7 @@ in your AI IDE instantly.
 | [`sync-prs`](./sync-prs/) | Use when the user asks to sync, check, refresh, or triage their own open GitHub pull requests — phrases like… |
 | [`typescript-conventions`](./typescript-conventions/) | A TypeScript convention baseline for typing, validation, enum handling, imports, and naming — favoring types… |
 | [`webapp-conventions`](./webapp-conventions/) | Portable conventions for building features in a SvelteKit + Tailwind web app — the layer above raw framework… |
+| [`zenstack-conventions`](./zenstack-conventions/) | ZenStack conventions grounded in the official 2.x documentation (zenstack.dev/docs/2.x), fetched and read dir… |
 <!-- END dev-agent-skills skills table -->
 
 This table is regenerated automatically by `setup.sh` (and by

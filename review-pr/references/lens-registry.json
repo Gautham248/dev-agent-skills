@@ -25,6 +25,12 @@
       "order": 61
     },
     {
+      "skill": "zenstack-conventions",
+      "concern": "ZenStack access policies, auth() semantics, ZModel schema",
+      "applies_to": [".zmodel"],
+      "order": 62
+    },
+    {
       "skill": "swift-conventions",
       "concern": "generic Swift idiom",
       "applies_to": [".swift"],
