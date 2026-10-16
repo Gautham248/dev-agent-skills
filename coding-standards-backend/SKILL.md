@@ -41,6 +41,10 @@ Universal rules were already applied by the coding-standards dispatcher before t
   `json({ resource })`); failures use its error helper with a status and
   message (e.g. `error(status, message)`) — error bodies always carry a
   `message` field.
+- **A privilege check a second handler would repeat is a shared guard, not a
+  copy.** One middleware resolves the caller's level for the resource and each
+  route declares the minimum it requires; the copy-pasted per-route deny block
+  is the smell the guard exists to remove.
 - **Request-scoped dependencies (DB client, user) arrive via the request
   context** (e.g. `locals`), injected by middleware — handlers never
   construct their own.

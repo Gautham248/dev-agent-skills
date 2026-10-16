@@ -67,6 +67,10 @@ of domain. Keep them in mind for the rest of this task.
   quantities use a decimal library, never raw floating-point.
 - **Centralize every string that appears twice**: URLs, query keys, modal
   IDs, test IDs, error codes live in typed constant objects.
+- **A shared helper owns the default; the caller passes only what differs.**
+  When the common case has one right answer — a standard denial, a timeout,
+  a header set — bake it into the helper and make that argument optional,
+  instead of making every call site restate it.
 - **Guard clauses first**: authorization and precondition checks return
   early; the happy path continues unindented.
 - **`console` is restricted** to `console.error` / `console.info` with a

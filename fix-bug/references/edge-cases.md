@@ -243,3 +243,8 @@ a code change built on top of it. Note also the asymmetry that made (3) expensiv
 having asserted the vulnerability, I then *changed working code* to address it, so a
 false alarm became a real diff; an unverified finding does not stay contained in the
 review.
+
+## 2026-10-09 — `gh pr create --body "$(cat <<'HEREDOC' …)"` fails under /bin/sh
+
+What happened: Step 11's documented PR-body form — `gh pr create … --body "$(cat <<'PR_BODY' … PR_BODY)"` — failed here with `/bin/sh: bad substitution: no closing ')'`. The command shell is /bin/sh (dash here), not bash, and dash does not parse a heredoc nested inside a command substitution the way bash does. Plain `sh` behaviour, not repo-specific.
+What I did: Wrote the body to a file and passed `--body-file <path>` instead, which is shell-agnostic. Prefer `--body-file` over the inline heredoc form wherever the shell may be `sh`/dash.

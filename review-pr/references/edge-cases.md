@@ -200,3 +200,148 @@ side-effect worth disclosing to the user rather than doing silently. Check
 whether `.graphify_analysis.json` exists before invoking architecture-context
 from a PR review, and if it is absent, expect Step 2b to degrade to manual
 coverage reasoning rather than to a generated cache.
+
+## 2026-09-28 — The tailwind lens can never fire on the PRs that need it most
+
+**Condition:** `coding-standards-tailwind`'s registry entry derives `applies_to`
+from that domain's `path_patterns` in `coding-standards/references/manifest.json`,
+which are config-shaped: `app.css`, `@theme`, `tailwind.config`, `postcss.config`.
+Step 3's `plan` gates the lens on changed paths matching those, so on a PR whose
+entire diff is Tailwind utility classes across `.tsx`/`.svelte` components the
+lens is reported as `coding-standards-tailwind: no changed file matches
+applies_to` and skipped -- even though the repo has the `tailwindcss` dependency
+and the styling conventions are exactly what the diff needs checked. Observed on
+a 51-file PR where every one of the 12 code files was utility-class markup.
+`coding-standards-frontend` does partially cover styling ("Styling is
+utility-first ..."), so this is silent under-coverage rather than zero coverage,
+which is what makes it easy to miss.
+
+**Handling:** Do not quietly proceed with the skipped lens set. Report in the
+summary that the tailwind lens was gated out and why, and either apply it
+manually as a fifth reading of the diff or explicitly note that styling was only
+reviewed through the frontend lens. The fix is a registry decision, not an
+automatic one (per `references/learning-loop.md`): widening the tailwind entry's
+`applies_to` to the component extensions would make it fire on nearly every
+frontend PR, so it needs a human to decide, not an agent silently editing
+`lens-registry.json` mid-review.
+
+## 2026-09-29 — The `../config/*.md` protocol pointers don't resolve on this install
+
+What happened: SKILL.md opens by pointing at `../config/CLARIFICATION-PROTOCOL.md`,
+`../config/SELF-IMPROVEMENT-PROTOCOL.md`, `../config/SESSION-MEMORY-PROTOCOL.md` and
+`../config/GRAPH-MEMORY-PROTOCOL.md`. Relative to `~/.commandcode/skills/review-pr/` those resolve to
+`~/.commandcode/skills/config/`, which does not exist — all four reads fail with
+`No such file or directory`. Every other skill in that directory is a **symlink** into
+`~/Code/personal/dev-agent-skills/<skill>/`, so `../config/` resolves for them; `review-pr` is a real
+directory (a copy), so it does not.
+
+What I did: read the four files from `~/Code/personal/dev-agent-skills/config/` — the directory the
+relative path was authored against. Nothing else changes; the protocols are host-agnostic. Worth checking
+first on any new machine: if `ls ~/.commandcode/skills/config/` comes up empty, the files are in the
+dev-agent-skills clone.
+
+## 2026-09-29 — Repo root is not the language project (Xcode root, pnpm project nested)
+
+What happened: This repo's root is an Xcode project (`Lio.xcodeproj`) with no
+`package.json` at all; the actual Node project is `packages/backend` (its own
+deps, lockfile, tsconfig/scripts, and the CI workflow's `working-directory`).
+Step 0's `gh pr view` works fine from the root, but Step 1b's
+`JSON.parse(fs.readFileSync('package.json','utf8'))` and `fs.existsSync('tsconfig.json')`
+run from cwd would throw ENOENT at the repo root, and Step 3's `plan --repo-root`
+would point at the wrong tree for a nested pnpm workspace. The PR checkout itself
+(Step 1) is also misleading: the repo root has no `node_modules`.
+What I did: Ran the repo's commands with an explicit `cwd`/package prefix
+(`packages/backend`) rather than the root, detected the project root with
+`find . -maxdepth 3 -name pnpm-lock.yaml` instead of assuming cwd, and read the
+target files straight out of the branch (`git show <branch>:<path>`) rather than
+relying on a root-level checkout. Worth detecting up front — before Step 1b, not
+after it throws.
+
+## 2026-10-01 — A stacked PR's base moved between Step 0 and Step 1; the API's changedFiles was stale
+
+What happened: Step 0's `gh pr view` reported `changedFiles: 20` for the PR under
+review, but by Step 1 the base branch had advanced — the sibling PR this head was
+stacked on had just been merged into it — and the real three-dot diff was 18
+files. `gh`'s cached `changedFiles`/`additions`/`deletions` still described the
+pre-merge diff, so any finding anchored against that shape would have been wrong.
+What I did: Re-derived the diff from git rather than trusting the API — `git
+fetch`, then `git merge-base <base> <head>` and `git diff <merge-base> <head>` —
+and reviewed that. Worth re-checking the merge-base at Step 1 even when Step 0
+looked clean; a stacked/sibling PR can merge in the gap between the two calls.
+
+## 2026-10-01 — Changed paths containing `[`/`]` (Next.js dynamic routes) cannot be read by path
+
+What happened: Step 2b's renamed-file sweep and every full-file read of a Next.js
+App Router path such as `app/[locale]/store/[collection]/store-collection-client.tsx`
+fails — the read tool parses `[...]` as a glob character class, matches nothing, and
+reports 0 files. Whole files that the diff clearly shows changing appear to not exist.
+What I did: Read those paths through the shell instead (`sed -n 'a,bp' "<path>"`,
+`grep -n ... "<path>"`), which takes the path literally. Worth knowing before
+concluding a bracketed changed file is empty or missing.
+
+## 2026-10-12 — Step 1b's type check is silently wrong when node_modules is present but stale
+
+What happened: A PR swapping Prisma for Drizzle/tRPC changed `package.json` but the working tree
+already had a `node_modules/` from the base branch. Step 1b only installs when the directory is
+absent (`[ -d node_modules ] || timeout 120 npm install`), so the stale tree slipped through and
+`tsc --noEmit` returned ~938 errors — almost all `Cannot find module 'drizzle-orm' |
+'@trpc/server' | '@paralleldrive/cuid2' | 'drizzle-kit/api'` — every one of which
+`classifyDiagnosticsAgainstDiff` would have marked `introduced` (they land on lines the diff added),
+i.e. a review full of false blocker compile errors.
+What I did: Did not trust the diagnostics. Grepped the missing-module summary, then checked the
+reported packages on disk (`node_modules/drizzle-orm` absent while `package-lock.json` listed it),
+ran `npm install`, and re-ran tsc → 0 errors / exit 0. General rule: on any PR whose
+`package.json`/`package-lock.json` changed, treat an existing `node_modules/` as *unverified*, not as
+"dependencies installed" — the presence check cannot see a version/dependency drift. Cheap pre-check
+before Step 1b: `git diff --name-only <base>...HEAD -- package.json package-lock.json`; if either is
+listed, install first.
+
+## 2026-10-12 — Step 2's `graphify affected --files "<files>"` does not match the installed CLI
+
+What happened: SKILL.md Step 2 (and architecture-context Step 3) say to run
+`graphify affected --files "<changed files>"`. The installed graphify's `affected` takes a single
+**positional node name** — `affected "X" [--relation R] [--depth N] [--graph P]` per `graphify
+--help` — and has no `--files` flag at all, so the command does not perform the file-based
+blast-radius traversal the step describes. Note this is separate from (and not fixed by) the
+2026-09-24 `architecture-context` entry: in this run `graphify-out/.graphify_analysis.json` *did*
+exist, so Step 4a seeding was fine — the gap was only the `affected` invocation.
+What I did: Substituted `graphify query "<question grounded in the change>"` for the blast-radius
+pass (it is the other `graphify` command Step 2 already lists) and derived the Step 2b subsystem
+picture from the graph's community structure (`communitiesToSubsystemSeeds`) plus direct tracing
+rather than from the `--files` form. Check `graphify affected --help` on first use; if it shows only
+a positional `"X"`, use `graphify query` in place of the `--files` invocation.
+
+## 2026-10-13 — Step 2b: architecture-context subsystem match returns {} for monorepo-prefixed paths
+
+What happened: In `10xMinds/lio`, Step 2b called architecture-context with the PR's changed files as
+`packages/app/Lio/Screens/...`. The cache's subsystems are anchored relative to the app package root
+(`Lio/App/AppState.swift`, `Lio/Screens/...`, `Lio/Components/...`), so
+`selectSubsystemsForFiles(cache.subsystems, targets)` returned `{}` even though three subsystems
+(`ios-app-state`, `ios-screen-views`, `cloudkit-sync-service`) plainly anchor the changed files.
+What I did: Read the cache directly (`loadCache(...).subsystems`, printing each entry's `summary` and
+`anchor_files`) and matched on the path *suffix* by hand to assemble the subsystem set for Step 2b's
+narrative and `subsystemsTouched`. General rule: when Step 2b's match comes back empty in a monorepo
+(changed paths carry a package prefix such as `packages/app/...`), don't conclude "no subsystem covers
+this area" — dump the cache's `anchor_files` and match on the trailing path first.
+
+## 2026-10-14 — Step 1b: `tsc` yields dozens of false "no exported member" errors until the Prisma/ZenStack client is generated
+
+What happened: On `10xMinds/lio` (backend = Prisma + ZenStack), `pnpm build` (tsc) reported ~45 errors on lines the diff never touched —
+`Module '"@prisma/client"' has no exported member 'Membership' / 'Space' / 'TaskWhereInput'`, `Prisma.ActivityWhereInput`
+missing, `Parameter 'tx' implicitly has an 'any' type`. All noise: the generated client was absent because
+`pnpm generate` (zenstack generate && prisma generate) had failed with `PrismaConfigEnvError: Missing required environment
+variable: DATABASE_URL`. (Secondary: the repo has no root package.json, so deps must be installed from `packages/backend`;
+`pnpm install` at the worktree root fails with ERR_PNPM_NO_PKG_MANIFEST.)
+What I did: Installed in `packages/backend`, then ran generate with a dummy `DATABASE_URL` set (generate parses the schema
+and does not open a connection), then re-ran `pnpm build` → exit 0. General rule: for a Prisma/ZenStack TS project,
+generate the client before trusting any tsc output, and if generate fails on an env var, set a dummy connection string
+rather than concluding the PR broke the types. `pnpm lint` (eslint) is a cheap independent signal worth running too.
+
+## 2026-10-14 — Running the backend suite resets the shared test DB (needs its own confirmation)
+
+What happened: `vitest`'s `globalSetup` in `10xMinds/lio` runs `prisma migrate reset --force` against
+`postgresql://…@localhost:5433/lio_test` before the suite. So "just run the tests" is a destructive migration-reset
+against a real (test) database, not a read.
+What I did: Did NOT run it without an explicit go-ahead; reported the review without the suite and offered to run it on
+confirmation. General rule: check `test/setup/global-setup.*` before running a suite — if the project resets/creates its
+test DB there, treat running it as a DB mutation needing its own confirmation, the same as the standing rules require.

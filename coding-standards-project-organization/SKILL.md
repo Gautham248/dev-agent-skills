@@ -68,6 +68,7 @@ The exact directory names follow the framework's conventions (`routes/`, `hooks.
 ### Organization rules (universal)
 
 - **One shared-code root with an import alias.** All reusable code lives under a single aliased directory; nothing reusable hides inside route/feature folders.
+- **Constants shared by more than one module live in one constants module** (e.g. `lib/constants.ts`), grouped by concern — not buried in whichever module happened to use them first. A constant only one module needs stays local to that module.
 - **Shared code is organized by kind, features by route/entry point.** The shared root groups code by kind (components, stores, services, types); feature-specific code lives with the feature's entry point.
 - **Modules grow from file to folder.** A concern starts as a single file (`thing.service.ts`); when it accumulates related files, it becomes a folder of the same name. Do not pre-create folder hierarchies for single files.
 - **Generated code is quarantined** in dedicated directories and never edited by hand.
