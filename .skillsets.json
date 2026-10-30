@@ -1,0 +1,23 @@
+{
+  "skillsets": [
+    {
+      "source_repo": "https://github.com/github/awesome-copilot.git",
+      "ref": null,
+      "commit": "5269f7ea2d6c3a9bfda5ed878b6726cf509121fd",
+      "subdir": "skills",
+      "prefix": null,
+      "imported_skills": [
+        {
+          "final_name": "apple-appstore-reviewer",
+          "source_path": "apple-appstore-reviewer"
+        }
+      ],
+      "installed_at": "2026-10-30T02:11:16.773Z",
+      "security_scan": {
+        "warning_count": 0,
+        "blocking_count": 0,
+        "allowed_unsafe": false
+      }
+    }
+  ]
+}
