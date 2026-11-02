@@ -18,6 +18,45 @@
         "blocking_count": 0,
         "allowed_unsafe": false
       }
+    },
+    {
+      "source_repo": "https://github.com/DietrichGebert/ponytail.git",
+      "ref": null,
+      "commit": "96608e078b2d5ea607c5c3b8b5a54d1c1fba6846",
+      "subdir": "skills",
+      "prefix": null,
+      "imported_skills": [
+        {
+          "final_name": "ponytail",
+          "source_path": "ponytail"
+        },
+        {
+          "final_name": "ponytail-audit",
+          "source_path": "ponytail-audit"
+        },
+        {
+          "final_name": "ponytail-debt",
+          "source_path": "ponytail-debt"
+        },
+        {
+          "final_name": "ponytail-gain",
+          "source_path": "ponytail-gain"
+        },
+        {
+          "final_name": "ponytail-help",
+          "source_path": "ponytail-help"
+        },
+        {
+          "final_name": "ponytail-review",
+          "source_path": "ponytail-review"
+        }
+      ],
+      "installed_at": "2026-11-02T02:09:34.530Z",
+      "security_scan": {
+        "warning_count": 0,
+        "blocking_count": 1,
+        "allowed_unsafe": true
+      }
     }
   ]
 }

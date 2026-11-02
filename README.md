@@ -27,6 +27,12 @@ in your AI IDE instantly.
 | [`graphify`](./graphify/) | Use for any question about a codebase, its architecture, file relationships, or project content — especially… |
 | [`investigate-issue`](./investigate-issue/) | Use when a developer points at an existing GitHub issue and wants it investigated and taken forward — phrases… |
 | [`plan-feature`](./plan-feature/) | Use when a developer wants to plan a new feature before building it — phrases like "plan this feature", "writ… |
+| [`ponytail`](./ponytail/) | Lazy senior dev mode: the smallest change that fully solves the task, and a reply a busy human understands in… |
+| [`ponytail-audit`](./ponytail-audit/) | Quality audit of a whole repo: bugs, security holes, what breaks under real load, risky code without tests, s… |
+| [`ponytail-debt`](./ponytail-debt/) | List every `shortcut:` comment (and older `ponytail:` ones) as a debt ledger. One-shot report, changes nothin… |
+| [`ponytail-gain`](./ponytail-gain/) | Show ponytail's measured savings (code, cost, speed) from the benchmark. One-shot display. Use for /ponytail-… |
+| [`ponytail-help`](./ponytail-help/) | Quick reference for ponytail levels, skills and commands. One-shot display. Use for /ponytail-help, "ponytail… |
+| [`ponytail-review`](./ponytail-review/) | Quality review of a change: is the logic right, is it safe, does it hold under real load, is risky code teste… |
 | [`revenuecat-conventions`](./revenuecat-conventions/) | RevenueCat conventions grounded in the official documentation (revenuecat.com/docs), fetched and read directl… |
 | [`review-pr`](./review-pr/) | Review a GitHub pull request you have been asked or assigned to review, and post the review back to GitHub as… |
 | [`skill-add`](./skill-add/) | Use when the user wants to add, import, or install a new external skill from a git repository — phrases like… |
