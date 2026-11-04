@@ -35,6 +35,7 @@ in your AI IDE instantly.
 | [`ponytail-review`](./ponytail-review/) | Quality review of a change: is the logic right, is it safe, does it hold under real load, is risky code teste… |
 | [`revenuecat-conventions`](./revenuecat-conventions/) | RevenueCat conventions grounded in the official documentation (revenuecat.com/docs), fetched and read directl… |
 | [`review-pr`](./review-pr/) | Review a GitHub pull request you have been asked or assigned to review, and post the review back to GitHub as… |
+| [`seo-optimize`](./seo-optimize/) | Use when a developer wants SEO or AI-search (GEO/AEO) improvements for a custom-coded React, Next.js or Svelt… |
 | [`skill-add`](./skill-add/) | Use when the user wants to add, import, or install a new external skill from a git repository — phrases like… |
 | [`skill-factory`](./skill-factory/) | Interviews the requester through a structured clarification protocol, then designs, writes, and validates a n… |
 | [`skill-update`](./skill-update/) | Use when the user wants to update, refresh, sync, or pull the latest version of one or all tracked external s… |

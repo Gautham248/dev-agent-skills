@@ -1,0 +1,2337 @@
+// seo-optimize/scripts/seo-scan-lib.mjs
+//
+// Deterministic, dependency-free (node: builtins only) static SEO scanner for
+// React, Next.js and SvelteKit codebases. It does the cheap, repeatable part of
+// the seo-optimize skill: detect the stack and its installed versions, map the
+// routes, and flag code patterns with a known crawl/index/metadata/GEO effect.
+// Judgement work (is this content helpful, is this the right title) stays with
+// the agent reading SKILL.md; nothing here calls an LLM or the network, except
+// fetchPages(), which only talks to the origins it is given.
+//
+// Every finding carries:
+//   id, pillar, severity, evidence, confidence, file, line, message, fix, ref,
+//   cluster
+// where
+//   severity   = critical | high | medium | low | info   (impact if true)
+//   evidence   = high | medium | experimental            (how well-established
+//                the SEO claim behind the rule is -- kpab/seo-mastery levels)
+//   confidence = certain | likely | verify               (how sure the static
+//                match is; "verify" means confirm in rendered HTML first)
+//   cluster    = root-cause key, so one template/layout fix can close many
+//                findings at once (rampstackco issue-impact-table idea)
+//
+// Static analysis can be wrong in both directions. The html/fetch modes check
+// the actual server output and outrank a static finding when they disagree.
+
+import fs from "node:fs";
+import path from "node:path";
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+export const SCANNER_VERSION = "1.0.0";
+
+const IGNORE_DIRS = new Set([
+  "node_modules", ".git", ".next", ".svelte-kit", "dist", "build", "out",
+  "coverage", ".vercel", ".netlify", ".turbo", ".output", ".cache",
+  "graphify-out", ".react-router", "storybook-static", ".idea", ".vscode",
+  "playwright-report", "test-results", "__snapshots__", ".pnpm-store",
+]);
+
+const CODE_EXT_RE = /\.(tsx|jsx|ts|js|mjs|cjs|svelte|mdx)$/;
+const MAX_FILES = 25000;
+const MAX_FILE_BYTES = 1_000_000;
+
+export const SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"];
+
+const PRIVATE_ROUTE_RE =
+  /^\/(api|admin|dashboard|account|accounts|settings|login|log-in|signin|sign-in|signup|sign-up|register|logout|auth|profile|checkout|cart|onboarding|internal|preview|draft|drafts|portal|me|reset-password|forgot-password|verify|callback)(\/|$)/i;
+
+const ARTICLE_ROUTE_RE = /^\/(blog|blogs|posts|post|articles|article|news|guides|guide|insights|resources|learn|stories|journal|changelog)(\/|$)/i;
+
+// AI crawler tokens, by documented purpose. Sources (fetched 2026-11-04):
+// developers.openai.com/api/docs/bots, support.claude.com/en/articles/8896518,
+// docs.perplexity.ai/docs/resources/perplexity-crawlers,
+// developers.google.com/search/docs/appearance/ai-features.
+export const AI_SEARCH_BOTS = ["OAI-SearchBot", "Claude-SearchBot", "PerplexityBot"];
+export const SEARCH_ENGINE_BOTS = ["Googlebot", "Bingbot"];
+export const AI_USER_FETCHERS = ["ChatGPT-User", "Claude-User", "Perplexity-User"];
+export const AI_TRAINING_TOKENS = [
+  "GPTBot", "ClaudeBot", "Google-Extended", "CCBot", "Applebot-Extended",
+  "Bytespider", "meta-externalagent", "cohere-ai",
+];
+
+// Next.js default HTML_LIMITED_BOT_UA_RE (next@16.4.5,
+// dist/shared/lib/router/utils/html-bots.js). These get blocking metadata in
+// <head>; every other UA on a dynamically rendered route gets streamed metadata.
+export const NEXT_DEFAULT_HTML_LIMITED_BOTS =
+  /[\w-]+-Google|Google-[\w-]+|Chrome-Lighthouse|Slurp|DuckDuckBot|baiduspider|yandex|sogou|bitlybot|tumblr|vkShare|quora link preview|redditbot|ia_archiver|Bingbot|BingPreview|applebot|facebookexternalhit|facebookcatalog|Twitterbot|LinkedInBot|Slackbot|Discordbot|WhatsApp|SkypeUriPreview|Yeti|googleweblight/i;
+
+// Schema.org types whose Google rich result is retired. FAQPage retired for all
+// sites 2026-05-07 (FAQPage docs notice); HowTo 2023; the rest June/July 2025
+// (developers.google.com/search/blog/2025/06/simplifying-search-results).
+const RETIRED_RICH_RESULT_TYPES = {
+  HowTo: "HowTo rich results were removed in September 2023.",
+  SpecialAnnouncement: "SpecialAnnouncement was deprecated on 2025-07-31.",
+  ClaimReview: "ClaimReview has no Search rich result since June 2025 (Fact Check Explorer still reads it).",
+  VehicleListing: "VehicleListing rich results were retired in June 2025.",
+  EstimatedSalary: "EstimatedSalary rich results were retired in June 2025.",
+  LearningVideo: "LearningVideo rich results were retired in June 2025; VideoObject still works.",
+};
+
+const DEFAULT_SCAFFOLD_TITLES = [
+  "vite + react", "vite + react + ts", "vite app", "react app", "create next app",
+  "create react app", "sveltekit app", "svelte app", "my app", "untitled",
+  "document", "home",
+];
+const DEFAULT_SCAFFOLD_DESCRIPTIONS = [
+  "generated by create next app", "web site created using create-react-app",
+];
+
+// ---------------------------------------------------------------------------
+// Small utilities
+// ---------------------------------------------------------------------------
+
+export function toPosix(p) {
+  return String(p || "").replace(/\\/g, "/");
+}
+
+export function readText(abs) {
+  try {
+    const st = fs.statSync(abs);
+    if (!st.isFile() || st.size > MAX_FILE_BYTES) return null;
+    return fs.readFileSync(abs, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+export function readJson(abs) {
+  const t = readText(abs);
+  if (t == null) return null;
+  try {
+    return JSON.parse(t);
+  } catch {
+    return null;
+  }
+}
+
+/** Recursively list files under root (posix, relative), skipping build dirs. */
+export function walkFiles(root, { maxFiles = MAX_FILES } = {}) {
+  const out = [];
+  const stack = [""];
+  while (stack.length) {
+    const rel = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(path.join(root, rel), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        if (IGNORE_DIRS.has(e.name)) continue;
+        stack.push(childRel);
+      } else if (e.isFile()) {
+        out.push(childRel);
+        if (out.length >= maxFiles) return out.sort();
+      }
+    }
+  }
+  return out.sort();
+}
+
+/** 1-based line number of a character offset. */
+export function lineAt(text, index) {
+  let line = 1;
+  for (let i = 0; i < index && i < text.length; i++) if (text.charCodeAt(i) === 10) line++;
+  return line;
+}
+
+/** Parse the major version out of a semver range or exact version. */
+export function majorOf(versionLike) {
+  if (!versionLike) return null;
+  const m = String(versionLike).match(/(\d+)(?:\.\d+)?/);
+  return m ? Number(m[1]) : null;
+}
+
+const PREV_ALLOWS_STRING = /[=(,:[!&|?{};+\-*%<>~^]|return|^$/;
+
+/**
+ * Blank out JS/TS comments while keeping line structure. Quotes only open a
+ * string when the previous significant token could precede an expression, so
+ * apostrophes in JSX text ("Don't") don't swallow the rest of the file.
+ */
+export function stripJsComments(src) {
+  const s = String(src);
+  let out = "";
+  let i = 0;
+  let prevSig = "";
+  while (i < s.length) {
+    const c = s[i];
+    const n = s[i + 1];
+    if (c === "/" && n === "/") {
+      while (i < s.length && s[i] !== "\n") { out += " "; i++; }
+      continue;
+    }
+    if (c === "/" && n === "*") {
+      out += "  "; i += 2;
+      while (i < s.length && !(s[i] === "*" && s[i + 1] === "/")) {
+        out += s[i] === "\n" ? "\n" : " "; i++;
+      }
+      if (i < s.length) { out += "  "; i += 2; }
+      continue;
+    }
+    if ((c === '"' || c === "'" || c === "`") && PREV_ALLOWS_STRING.test(prevSig)) {
+      const q = c;
+      out += c; i++;
+      while (i < s.length && s[i] !== q) {
+        if (s[i] === "\\") { out += s[i] + (s[i + 1] ?? ""); i += 2; continue; }
+        if (q !== "`" && s[i] === "\n") break; // unterminated: bail out of the string
+        out += s[i]; i++;
+      }
+      if (i < s.length) { out += s[i]; i++; }
+      prevSig = "x";
+      continue;
+    }
+    out += c;
+    if (!/\s/.test(c)) {
+      if (/[A-Za-z0-9_$]/.test(c)) {
+        // read a whole word so "return" is recognised
+        let j = i;
+        while (j > 0 && /[A-Za-z0-9_$]/.test(s[j - 1])) j--;
+        prevSig = s.slice(j, i + 1);
+      } else prevSig = c;
+    }
+    i++;
+  }
+  return out;
+}
+
+/** Blank HTML comments, preserving newlines. */
+export function stripHtmlComments(src) {
+  return String(src).replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
+}
+
+/** Comment-stripped view of a source file, by extension. */
+export function cleanSource(rel, text) {
+  if (text == null) return "";
+  if (/\.svelte$/.test(rel)) {
+    const noHtml = stripHtmlComments(text);
+    return noHtml.replace(/(<script\b[^>]*>)([\s\S]*?)(<\/script>)/gi,
+      (_, a, body, b) => a + stripJsComments(body) + b);
+  }
+  if (/\.html?$/.test(rel)) return stripHtmlComments(text);
+  if (CODE_EXT_RE.test(rel)) return stripJsComments(text);
+  return text;
+}
+
+/**
+ * Find opening tags of the given names, tolerant of JSX/Svelte expressions in
+ * attributes (arrow functions contain '>'). Returns {name, attrs, start, end}.
+ */
+export function findTags(text, names) {
+  const nameRe = new RegExp(`<(${names.join("|")})(?=[\\s/>])`, "g");
+  const tags = [];
+  let m;
+  while ((m = nameRe.exec(text))) {
+    const start = m.index;
+    let i = start + m[0].length;
+    let depth = 0;
+    let quote = null;
+    for (; i < text.length; i++) {
+      const c = text[i];
+      if (quote) {
+        if (c === "\\") { i++; continue; }
+        if (c === quote) quote = null;
+        continue;
+      }
+      if (c === "{") depth++;
+      else if (c === "}") depth = Math.max(0, depth - 1);
+      else if ((c === '"' || c === "'" || (c === "`" && depth > 0))) quote = c;
+      else if (c === ">" && depth === 0) break;
+    }
+    const attrs = text.slice(start + m[0].length, i).replace(/\/\s*$/, "");
+    tags.push({ name: m[1], attrs, start, end: i });
+    nameRe.lastIndex = Math.max(nameRe.lastIndex, i);
+  }
+  return tags;
+}
+
+/**
+ * Parse a tag's attribute text into {name: {raw, value, expr}}. Spreads set
+ * `__spread`. Svelte shorthand {alt} is recorded as alt with expr.
+ */
+export function parseAttrs(attrText) {
+  const attrs = {};
+  const s = attrText;
+  let i = 0;
+  while (i < s.length) {
+    while (i < s.length && /\s/.test(s[i])) i++;
+    if (i >= s.length) break;
+    if (s[i] === "{") {
+      let depth = 0; const st = i;
+      for (; i < s.length; i++) {
+        if (s[i] === "{") depth++;
+        else if (s[i] === "}") { depth--; if (depth === 0) { i++; break; } }
+      }
+      const inner = s.slice(st + 1, i - 1).trim();
+      if (inner.startsWith("...")) attrs.__spread = true;
+      else if (/^[A-Za-z_$][\w$]*$/.test(inner)) attrs[inner] = { raw: `{${inner}}`, expr: inner };
+      continue;
+    }
+    const nm = s.slice(i).match(/^([^\s=/>{}"']+)/);
+    if (!nm) { i++; continue; }
+    const name = nm[1];
+    i += name.length;
+    while (i < s.length && /\s/.test(s[i])) i++;
+    if (s[i] !== "=") { attrs[name] = { raw: "", value: true }; continue; }
+    i++;
+    while (i < s.length && /\s/.test(s[i])) i++;
+    const q = s[i];
+    if (q === '"' || q === "'") {
+      const end = s.indexOf(q, i + 1);
+      const v = s.slice(i + 1, end < 0 ? s.length : end);
+      attrs[name] = { raw: q + v + q, value: v };
+      i = end < 0 ? s.length : end + 1;
+    } else if (q === "{") {
+      let depth = 0; const st = i;
+      for (; i < s.length; i++) {
+        if (s[i] === "{") depth++;
+        else if (s[i] === "}") { depth--; if (depth === 0) { i++; break; } }
+      }
+      const expr = s.slice(st + 1, i - 1).trim();
+      const lit = expr.match(/^(["'`])([^"'`]*)\1$/);
+      attrs[name] = lit ? { raw: `{${expr}}`, value: lit[2] } : { raw: `{${expr}}`, expr };
+    } else {
+      const v = s.slice(i).match(/^[^\s>]+/);
+      attrs[name] = { raw: v ? v[0] : "", value: v ? v[0] : "" };
+      i += v ? v[0].length : 1;
+    }
+  }
+  return attrs;
+}
+
+/** Return the balanced {...} starting at the first '{' at or after `from`. */
+export function balancedBlock(text, from, open = "{", close = "}") {
+  const st = text.indexOf(open, from);
+  if (st < 0) return null;
+  let depth = 0;
+  let quote = null;
+  for (let i = st; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      if (c === "\\") { i++; continue; }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") { quote = c; continue; }
+    if (c === open) depth++;
+    else if (c === close) { depth--; if (depth === 0) return { start: st, end: i + 1, text: text.slice(st, i + 1) }; }
+  }
+  return null;
+}
+
+/** Top-level keys of an object-literal text like "{ a: 1, b: { c: 2 } }". */
+export function topLevelKeys(objText) {
+  const keys = new Map();
+  if (!objText) return keys;
+  let depth = 0;
+  let quote = null;
+  const s = objText;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (quote) {
+      if (c === "\\") { i++; continue; }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      if (depth === 1) {
+        const rest = s.slice(i).match(/^(["'])([\w$@:-]+)\1\s*:/);
+        if (rest) { keys.set(rest[2], i + rest[0].length); i += rest[0].length - 1; continue; }
+      }
+      quote = c; continue;
+    }
+    if (c === "{" || c === "[" || c === "(") { depth++; continue; }
+    if (c === "}" || c === "]" || c === ")") { depth--; continue; }
+    if (depth === 1 && /[A-Za-z_$]/.test(c) && /[\s{,]/.test(s[i - 1] || " ")) {
+      const km = s.slice(i).match(/^([A-Za-z_$][\w$]*)\s*(:|,|\}|\n)/);
+      if (km) {
+        if (km[2] === ":") keys.set(km[1], i + km[0].length);
+        else keys.set(km[1], -1); // shorthand property
+        i += km[1].length - 1;
+      }
+    }
+  }
+  return keys;
+}
+
+/** Value text for a top-level key (up to the next top-level comma). */
+export function valueOfKey(objText, key) {
+  const keys = topLevelKeys(objText);
+  if (!keys.has(key)) return null;
+  const at = keys.get(key);
+  if (at < 0) return { shorthand: true, text: key };
+  let depth = 0;
+  let quote = null;
+  let i = at;
+  for (; i < objText.length; i++) {
+    const c = objText[i];
+    if (quote) {
+      if (c === "\\") { i++; continue; }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") { quote = c; continue; }
+    if (c === "{" || c === "[" || c === "(") depth++;
+    else if (c === "}" || c === "]" || c === ")") { if (depth === 0) break; depth--; }
+    else if (c === "," && depth === 0) break;
+  }
+  return { text: objText.slice(at, i).trim() };
+}
+
+export function stringLiteral(valueText) {
+  if (!valueText) return null;
+  const m = String(valueText).trim().match(/^(["'`])([\s\S]*)\1$/);
+  if (!m) return null;
+  if (m[1] === "`" && /\$\{/.test(m[2])) return null;
+  return m[2];
+}
+
+// ---------------------------------------------------------------------------
+// Project model
+// ---------------------------------------------------------------------------
+
+/**
+ * A lightweight in-memory view of a project: file list, lazy cleaned text,
+ * merged dependencies and installed versions.
+ */
+export function loadProject(rootDir) {
+  const root = path.resolve(rootDir);
+  const files = walkFiles(root);
+  const fileSet = new Set(files);
+  const cache = new Map();
+  const pkg = readJson(path.join(root, "package.json")) || {};
+  const deps = { ...(pkg.peerDependencies || {}), ...(pkg.devDependencies || {}), ...(pkg.dependencies || {}) };
+  const project = {
+    root,
+    files,
+    has: (rel) => fileSet.has(rel),
+    first: (...rels) => rels.find((r) => fileSet.has(r)) || null,
+    raw(rel) {
+      if (!cache.has(`raw:${rel}`)) cache.set(`raw:${rel}`, readText(path.join(root, rel)));
+      return cache.get(`raw:${rel}`);
+    },
+    src(rel) {
+      if (!cache.has(`src:${rel}`)) cache.set(`src:${rel}`, cleanSource(rel, project.raw(rel)));
+      return cache.get(`src:${rel}`);
+    },
+    pkg,
+    deps,
+    dep: (name) => (Object.prototype.hasOwnProperty.call(deps, name) ? deps[name] : null),
+    installedVersion(name) {
+      const p = readJson(path.join(root, "node_modules", ...name.split("/"), "package.json"));
+      return p && p.version ? p.version : null;
+    },
+  };
+  project.version = (name) => project.installedVersion(name) || project.dep(name);
+  project.major = (name) => majorOf(project.version(name));
+  return project;
+}
+
+/** Monorepo helper: package.json dirs that look like web apps. */
+export function findWorkspaceApps(rootDir) {
+  const root = path.resolve(rootDir);
+  const out = [];
+  for (const rel of walkFiles(root, { maxFiles: 50000 })) {
+    if (!/(^|\/)package\.json$/.test(rel)) continue;
+    const pkg = readJson(path.join(root, rel));
+    if (!pkg) continue;
+    const deps = { ...(pkg.devDependencies || {}), ...(pkg.dependencies || {}) };
+    const kind = deps.next ? "nextjs" : deps["@sveltejs/kit"] ? "sveltekit"
+      : (deps["@react-router/dev"] ? "react-router-framework"
+        : (deps.react && (deps.vite || deps["react-scripts"]) ? "react-spa" : null));
+    if (kind) out.push({ dir: path.posix.dirname(rel) === "." ? "." : path.posix.dirname(rel), kind, name: pkg.name || null });
+  }
+  return out;
+}
+
+function detectPackageManager(p) {
+  if (p.has("pnpm-lock.yaml")) return "pnpm";
+  if (p.has("yarn.lock")) return "yarn";
+  if (p.has("bun.lockb") || p.has("bun.lock")) return "bun";
+  if (p.has("package-lock.json")) return "npm";
+  return null;
+}
+
+const DOCS = {
+  nextjs: {
+    local: "node_modules/next/dist/docs",
+    online: "https://nextjs.org/docs (append .md to any docs URL for markdown)",
+    pages: [
+      "01-app/01-getting-started/14-metadata-and-og-images.md",
+      "01-app/03-api-reference/04-functions/generate-metadata.md",
+      "01-app/03-api-reference/03-file-conventions/01-metadata/robots.md",
+      "01-app/03-api-reference/03-file-conventions/01-metadata/sitemap.md",
+      "01-app/02-guides/json-ld.md",
+      "01-app/03-api-reference/05-config/01-next-config-js/htmlLimitedBots.md",
+    ],
+  },
+  sveltekit: {
+    local: null,
+    online: "https://svelte.dev/docs/kit/<page>/llms.txt (seo, page-options, adapter-static, migrating-to-sveltekit-3)",
+    pages: ["seo", "page-options", "adapter-static", "load", "errors"],
+  },
+  "react-router-framework": {
+    local: "node_modules/react-router/docs",
+    online: "https://reactrouter.com",
+    pages: ["how-to/meta.md", "how-to/pre-rendering.md", "how-to/spa.md", "how-to/status.md"],
+  },
+  "react-spa": {
+    local: null,
+    online: "https://react.dev/reference/react-dom/components/title.md and /meta.md, /link.md",
+    pages: [],
+  },
+};
+
+/**
+ * Detect framework, variant, versions, language, rendering mode and the
+ * metadata mechanism in use. Pure function of the files on disk.
+ */
+export function detectStack(p) {
+  const notes = [];
+  const versions = {};
+  for (const name of ["next", "react", "react-dom", "@sveltejs/kit", "svelte", "vite",
+    "react-router", "react-router-dom", "@react-router/dev", "react-helmet",
+    "react-helmet-async", "@sveltejs/adapter-static", "@sveltejs/adapter-auto",
+    "@sveltejs/adapter-node", "@sveltejs/adapter-vercel", "next-sitemap", "react-scripts"]) {
+    const v = p.version(name);
+    if (v) versions[name] = v;
+  }
+  const language = p.has("tsconfig.json") || p.files.some((f) => /\.(tsx?)$/.test(f) && !f.endsWith(".d.ts")) ? "ts" : "js";
+
+  let framework = "unknown";
+  let variant = null;
+  const dirs = {};
+  if (p.dep("next")) {
+    framework = "nextjs";
+    const appDir = ["app", "src/app"].find((d) => p.files.some((f) => f.startsWith(`${d}/`) && /\/layout\.(tsx|jsx|ts|js)$/.test(f)));
+    const pagesDir = ["pages", "src/pages"].find((d) => p.files.some((f) => f.startsWith(`${d}/`) && CODE_EXT_RE.test(f)));
+    if (appDir) dirs.app = appDir;
+    if (pagesDir) dirs.pages = pagesDir;
+    variant = appDir && pagesDir ? "app-and-pages-router" : appDir ? "app-router" : pagesDir ? "pages-router" : "unknown";
+  } else if (p.dep("@sveltejs/kit")) {
+    framework = "sveltekit";
+    variant = p.major("@sveltejs/kit") >= 3 ? "sveltekit-3" : "sveltekit-2-or-earlier";
+    dirs.routes = "src/routes";
+  } else if (p.dep("@react-router/dev") || p.first("react-router.config.ts", "react-router.config.js")) {
+    framework = "react-router-framework";
+    variant = `react-router-${p.major("react-router") || "?"}`;
+    dirs.app = p.has("app/root.tsx") || p.has("app/root.jsx") ? "app" : "app";
+  } else if (p.dep("react") && (p.dep("vite") || p.dep("react-scripts") || p.has("index.html") || p.has("public/index.html"))) {
+    framework = "react-spa";
+    variant = p.dep("react-scripts") ? "create-react-app" : "vite";
+  }
+  if (p.dep("astro") || p.dep("nuxt") || p.dep("gatsby") || p.dep("@remix-run/react")) {
+    notes.push("Project also/instead uses a framework outside this skill's primary scope (astro/nuxt/gatsby/remix); generic checks still apply, stack-specific ones may not.");
+  }
+
+  // Rendering mode
+  const rendering = detectRendering(p, framework, dirs, notes);
+
+  // Metadata mechanism
+  let metadataLib = null;
+  if (framework === "nextjs") metadataLib = dirs.app ? "next-metadata-api" : "next/head";
+  else if (framework === "sveltekit") metadataLib = "svelte:head";
+  else if (framework === "react-router-framework") metadataLib = "route-meta-export-or-react19-elements";
+  else if (framework === "react-spa") {
+    if (p.dep("react-helmet-async")) metadataLib = "react-helmet-async";
+    else if (p.dep("react-helmet")) metadataLib = "react-helmet (deprecated)";
+    else if ((p.major("react") || 0) >= 19) metadataLib = "react19-native-elements";
+    else metadataLib = "none-detected";
+  }
+
+  const i18n = ["next-intl", "next-i18next", "react-i18next", "i18next", "@inlang/paraglide-js",
+    "@inlang/paraglide-sveltekit", "svelte-i18n", "typesafe-i18n", "react-intl", "@lingui/core", "sveltekit-i18n"]
+    .filter((d) => p.dep(d));
+
+  const docs = DOCS[framework] ? { ...DOCS[framework] } : null;
+  if (docs && docs.local) docs.localAvailable = fs.existsSync(path.join(p.root, docs.local));
+
+  return {
+    framework,
+    variant,
+    language,
+    packageManager: detectPackageManager(p),
+    versions,
+    dirs,
+    rendering,
+    metadataLib,
+    i18n,
+    docs,
+    notes,
+  };
+}
+
+function exportConst(src, name) {
+  const m = src.match(new RegExp(`export\\s+(?:const|let|var)\\s+${name}\\s*(?::[^=]+)?=\\s*([^;\\n]+)`));
+  return m ? m[1].trim() : null;
+}
+
+function detectRendering(p, framework, dirs, notes) {
+  const r = { mode: "unknown", details: [] };
+  if (framework === "nextjs") {
+    const cfg = p.first("next.config.ts", "next.config.mjs", "next.config.js", "next.config.cjs");
+    const cfgSrc = cfg ? p.src(cfg) : "";
+    if (/output\s*:\s*["']export["']/.test(cfgSrc)) { r.mode = "static-export"; r.details.push(`${cfg}: output: 'export'`); }
+    else r.mode = "server-rendered (per-route static/dynamic)";
+    if (/htmlLimitedBots\s*:/.test(cfgSrc)) r.details.push("htmlLimitedBots configured");
+    r.config = cfg;
+  } else if (framework === "sveltekit") {
+    const rootLayouts = ["src/routes/+layout.js", "src/routes/+layout.ts", "src/routes/+layout.server.js", "src/routes/+layout.server.ts"].filter((f) => p.has(f));
+    let ssr = "true";
+    let prerender = null;
+    for (const f of rootLayouts) {
+      const s = p.src(f);
+      const v = exportConst(s, "ssr");
+      if (v) ssr = v;
+      const pr = exportConst(s, "prerender");
+      if (pr) prerender = pr;
+    }
+    const cfg = p.first("svelte.config.js", "svelte.config.mjs", "svelte.config.ts", "vite.config.ts", "vite.config.js", "vite.config.mjs");
+    const cfgFiles = ["svelte.config.js", "svelte.config.mjs", "vite.config.ts", "vite.config.js", "vite.config.mjs"].filter((f) => p.has(f));
+    const cfgSrc = cfgFiles.map((f) => p.src(f)).join("\n");
+    const staticFallback = /adapter-static/.test(cfgSrc) && /fallback\s*:\s*["'][^"']+["']/.test(cfgSrc);
+    if (ssr === "false") r.mode = "csr-only (root ssr = false)";
+    else if (staticFallback) r.mode = "spa-fallback (adapter-static fallback)";
+    else if (prerender === "true") r.mode = "prerendered";
+    else r.mode = "server-rendered";
+    if (prerender) r.details.push(`root prerender = ${prerender}`);
+    const ts = rootLayouts.map((f) => exportConst(p.src(f), "trailingSlash")).find(Boolean);
+    if (ts) r.trailingSlash = ts.replace(/["']/g, "");
+    r.config = cfg;
+    if (p.major("@sveltejs/kit") >= 3 && p.has("svelte.config.js")) {
+      notes.push("SvelteKit 3 no longer reads svelte.config.js; options belong in the sveltekit() plugin in vite.config (migrating-to-sveltekit-3).");
+    }
+  } else if (framework === "react-router-framework") {
+    const cfg = p.first("react-router.config.ts", "react-router.config.js");
+    const s = cfg ? p.src(cfg) : "";
+    const ssr = (s.match(/ssr\s*:\s*(true|false)/) || [])[1];
+    const pre = /prerender\s*:/.test(s);
+    r.mode = ssr === "false" ? (pre ? "spa-with-prerender" : "spa (ssr: false; only root prerendered)") : "server-rendered";
+    if (pre) r.details.push("prerender configured");
+    r.config = cfg;
+  } else if (framework === "react-spa") {
+    const prerenderDeps = ["vite-plugin-prerender", "vite-ssg", "vite-react-ssg", "react-snap", "@prerenderer/rollup-plugin",
+      "@prerenderer/renderer-puppeteer", "vike", "vite-plugin-ssr", "react-static", "@vitejs/plugin-react-ssr"].filter((d) => p.dep(d));
+    const ssrEntry = p.files.some((f) => /entry[-.]server\.(tsx|jsx|ts|js)$/.test(f));
+    if (prerenderDeps.length) { r.mode = "prerendered"; r.details.push(`prerender via ${prerenderDeps.join(", ")}`); }
+    else if (ssrEntry) { r.mode = "custom-ssr"; r.details.push("entry-server file found"); }
+    else r.mode = "csr-only";
+  }
+  return r;
+}
+
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
+
+function isPrivatePath(route) {
+  return PRIVATE_ROUTE_RE.test(route);
+}
+
+/** Next.js App Router routes from page files. */
+export function nextAppRoutes(p, appDir) {
+  const routes = [];
+  for (const f of p.files) {
+    if (!f.startsWith(`${appDir}/`)) continue;
+    if (!/\/page\.(tsx|jsx|ts|js|mdx|md)$/.test(f)) continue;
+    const segs = f.slice(appDir.length + 1).split("/").slice(0, -1);
+    if (segs.some((s) => s.startsWith("_") || s.startsWith("@") || /^\(\.+\)/.test(s))) continue;
+    const urlSegs = segs.filter((s) => !/^\(.*\)$/.test(s));
+    const route = "/" + urlSegs.join("/");
+    routes.push({
+      route: route === "/" ? "/" : route.replace(/\/$/, ""),
+      file: f,
+      dir: segs,
+      dynamic: urlSegs.some((s) => s.startsWith("[")),
+      private: isPrivatePath(route),
+    });
+  }
+  return routes;
+}
+
+/** Next.js Pages Router routes. */
+export function nextPagesRoutes(p, pagesDir) {
+  const routes = [];
+  for (const f of p.files) {
+    if (!f.startsWith(`${pagesDir}/`) || !/\.(tsx|jsx|ts|js|mdx|md)$/.test(f)) continue;
+    const rel = f.slice(pagesDir.length + 1).replace(/\.(tsx|jsx|ts|js|mdx|md)$/, "");
+    if (/^(_app|_document|_error)$/.test(rel) || rel.startsWith("api/")) continue;
+    let route = "/" + rel.replace(/(^|\/)index$/, "");
+    route = route === "/" ? "/" : route.replace(/\/$/, "");
+    routes.push({ route, file: f, dynamic: /\[/.test(rel), private: isPrivatePath(route), special: /^(404|500)$/.test(rel) });
+  }
+  return routes;
+}
+
+/** SvelteKit routes from +page.svelte files. */
+export function svelteKitRoutes(p) {
+  const routes = [];
+  for (const f of p.files) {
+    if (!f.startsWith("src/routes/") || !/\/\+page(@[^/]*)?\.svelte$/.test(f)) continue;
+    const segs = f.slice("src/routes/".length).split("/").slice(0, -1);
+    const urlSegs = segs.filter((s) => !/^\(.*\)$/.test(s));
+    const route = "/" + urlSegs.join("/");
+    routes.push({
+      route: route === "/" ? "/" : route.replace(/\/$/, ""),
+      file: f,
+      dir: segs,
+      dynamic: urlSegs.some((s) => s.includes("[")),
+      private: isPrivatePath(route),
+    });
+  }
+  return routes;
+}
+
+/** Best-effort route paths from React Router config in a SPA or routes.ts. */
+export function reactRoutes(p) {
+  const seen = new Map();
+  for (const f of p.files) {
+    if (!/\.(tsx|jsx|ts|js)$/.test(f) || /(^|\/)(test|tests|__tests__)\//.test(f)) continue;
+    const s = p.src(f);
+    if (!s || !/(react-router|@react-router|createBrowserRouter|<Route\b|route\()/.test(s)) continue;
+    const re = /(?:\bpath\s*[:=]\s*\{?\s*|\broute\(\s*)["'`]([^"'`]*)["'`]/g;
+    let m;
+    while ((m = re.exec(s))) {
+      let r = m[1];
+      if (r === "*" || r.includes("*")) continue;
+      r = r.startsWith("/") ? r : `/${r}`;
+      if (!seen.has(r)) seen.set(r, { route: r, file: f, line: lineAt(s, m.index), dynamic: /:/.test(r), private: isPrivatePath(r) });
+    }
+    if (/\bindex\(\s*["'`]/.test(s) && !seen.has("/")) seen.set("/", { route: "/", file: f, dynamic: false, private: false });
+  }
+  return [...seen.values()];
+}
+
+// ---------------------------------------------------------------------------
+// Findings
+// ---------------------------------------------------------------------------
+
+function makeCollector() {
+  const findings = [];
+  const seen = new Set();
+  const add = (f) => {
+    const key = `${f.id}|${f.file || ""}|${f.line || ""}|${f.message}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    findings.push({
+      id: f.id,
+      pillar: f.pillar,
+      severity: f.severity,
+      evidence: f.evidence || "high",
+      confidence: f.confidence || "likely",
+      file: f.file || null,
+      line: f.line || null,
+      message: f.message,
+      fix: f.fix || null,
+      ref: f.ref || null,
+      cluster: f.cluster || f.file || f.id,
+    });
+  };
+  return { findings, add };
+}
+
+function envGated(text) {
+  return /process\.env\.(NODE_ENV|VERCEL_ENV|NEXT_PUBLIC_[A-Z_]*ENV[A-Z_]*|APP_ENV|DEPLOY_ENV|CONTEXT)|import\.meta\.env\.(MODE|PROD|DEV|VITE_[A-Z_]*ENV)|\$env\/|\$app\/env|\bdev\b\s*\?/.test(text);
+}
+
+// ---------------------------------------------------------------------------
+// robots.txt
+// ---------------------------------------------------------------------------
+
+/** Parse robots.txt text into groups [{agents:[], rules:[{type, path}]}], sitemaps. */
+export function parseRobotsTxt(text) {
+  const groups = [];
+  const sitemaps = [];
+  const other = [];
+  let current = null;
+  let lastWasAgent = false;
+  for (const rawLine of String(text || "").split(/\r?\n/)) {
+    const line = rawLine.replace(/#.*$/, "").trim();
+    if (!line) continue;
+    const m = line.match(/^([A-Za-z-]+)\s*:\s*(.*)$/);
+    if (!m) continue;
+    const key = m[1].toLowerCase();
+    const val = m[2].trim();
+    if (key === "user-agent") {
+      if (!current || !lastWasAgent) { current = { agents: [], rules: [] }; groups.push(current); }
+      current.agents.push(val);
+      lastWasAgent = true;
+      continue;
+    }
+    lastWasAgent = false;
+    if (key === "sitemap") { sitemaps.push(val); continue; }
+    if ((key === "allow" || key === "disallow") && current) { current.rules.push({ type: key, path: val }); continue; }
+    other.push({ key, val });
+  }
+  return { groups, sitemaps, other };
+}
+
+/**
+ * Best-effort conversion of a Next.js app/robots.ts or a SvelteKit robots
+ * endpoint into robots.txt-like groups, by reading literal userAgent/allow/
+ * disallow values. Returns null when nothing literal is found.
+ */
+export function robotsFromCode(src) {
+  const groups = [];
+  const re = /userAgent\s*:\s*(\[[^\]]*\]|["'`][^"'`]*["'`])/g;
+  let m;
+  while ((m = re.exec(src))) {
+    const agents = [...m[1].matchAll(/["'`]([^"'`]+)["'`]/g)].map((x) => x[1]);
+    const rest = src.slice(m.index, m.index + 600);
+    const block = rest.split(/userAgent\s*:/)[1] || rest;
+    const grab = (key) => {
+      const mm = block.match(new RegExp(`(?<![A-Za-z])${key}\\s*:\\s*(\\[[^\\]]*\\]|["'\`][^"'\`]*["'\`])`));
+      return mm ? [...mm[1].matchAll(/["'`]([^"'`]*)["'`]/g)].map((x) => x[1]) : [];
+    };
+    groups.push({
+      agents,
+      rules: [...grab("allow").map((x) => ({ type: "allow", path: x })), ...grab("disallow").map((x) => ({ type: "disallow", path: x }))],
+    });
+  }
+  // Template-literal robots endpoints (SvelteKit +server.ts returning text)
+  if (!groups.length) {
+    const lit = src.match(/User-agent\s*:[\s\S]*?(?=["'`]\s*[,)\n;])/i);
+    if (lit) return parseRobotsTxt(lit[0]).groups.length ? { groups: parseRobotsTxt(lit[0]).groups, sitemaps: parseRobotsTxt(lit[0]).sitemaps } : null;
+  }
+  const sitemaps = [...src.matchAll(/sitemap\s*:\s*(\[[^\]]*\]|["'`][^"'`]*["'`]|[A-Za-z_$][\w$.]*)/gi)].map((x) => x[1]);
+  return groups.length ? { groups, sitemaps } : null;
+}
+
+function groupFor(groups, token) {
+  const t = token.toLowerCase();
+  const named = groups.find((g) => g.agents.some((a) => a.toLowerCase() === t));
+  if (named) return { group: named, named: true };
+  const star = groups.find((g) => g.agents.some((a) => a === "*"));
+  return star ? { group: star, named: false } : null;
+}
+
+function disallowsRoot(group) {
+  if (!group) return false;
+  const allowRoot = group.rules.some((r) => r.type === "allow" && (r.path === "/" || r.path === "/*"));
+  return group.rules.some((r) => r.type === "disallow" && (r.path === "/" || r.path === "/*")) && !allowRoot;
+}
+
+function checkRobots(add, robots, file, gated, framework) {
+  const ref = "references/crawlability.md#robotstxt";
+  const star = robots.groups.find((g) => g.agents.includes("*"));
+  if (disallowsRoot(star)) {
+    add({
+      id: "CRAWL-002", pillar: "crawlability", severity: gated ? "info" : "critical",
+      confidence: gated ? "verify" : "certain", file,
+      message: gated
+        ? "robots disallows everything for User-agent: *, but the file is environment-gated. Confirm production serves an allow-all policy."
+        : "robots.txt disallows the whole site for User-agent: * (Disallow: /). Nothing can be crawled.",
+      fix: "Allow / for User-agent: * in production; keep the blanket disallow only on preview/staging builds.",
+      ref, cluster: "robots",
+    });
+  }
+  const assetPatterns = framework === "nextjs" ? ["/_next"] : framework === "sveltekit" ? ["/_app"] : ["/assets", "/static"];
+  for (const g of robots.groups) {
+    for (const r of g.rules) {
+      if (r.type !== "disallow" || !r.path) continue;
+      if (assetPatterns.some((a) => r.path.startsWith(a)) || /\*\.(js|css)\$?$/.test(r.path) || /^\/(js|css)\/?$/.test(r.path)) {
+        add({
+          id: "CRAWL-004", pillar: "crawlability", severity: "high", confidence: "certain", file,
+          message: `robots.txt blocks rendering resources (${g.agents.join(", ")} -> Disallow: ${r.path}). Google cannot render pages whose JS/CSS is blocked.`,
+          fix: `Remove "Disallow: ${r.path}".`, ref, cluster: "robots",
+        });
+      }
+    }
+  }
+  for (const bot of [...SEARCH_ENGINE_BOTS, ...AI_SEARCH_BOTS]) {
+    const g = groupFor(robots.groups, bot);
+    if (g && g.named && disallowsRoot(g.group)) {
+      add({
+        id: "GEO-001", pillar: "geo", severity: "high", confidence: "certain", file,
+        message: `robots.txt blocks ${bot}, the crawler that decides visibility in ${bot === "OAI-SearchBot" ? "ChatGPT search" : bot === "Claude-SearchBot" ? "Claude search" : bot === "PerplexityBot" ? "Perplexity" : "web search"}.`,
+        fix: `Remove the Disallow for ${bot} unless excluding the site from that surface is a deliberate business decision.`,
+        ref: "references/geo-ai-search.md#crawler-policy", cluster: "robots",
+      });
+    }
+  }
+  const blockedTraining = AI_TRAINING_TOKENS.filter((t) => { const g = groupFor(robots.groups, t); return g && g.named && disallowsRoot(g.group); });
+  if (blockedTraining.length) {
+    add({
+      id: "GEO-002", pillar: "geo", severity: "info", evidence: "high", confidence: "certain", file,
+      message: `Training/grounding tokens blocked: ${blockedTraining.join(", ")}. This is a licensing choice and does not by itself remove the site from AI search answers.`,
+      fix: "No action needed if intentional. Keep search crawlers (OAI-SearchBot, Claude-SearchBot, PerplexityBot, Googlebot) allowed.",
+      ref: "references/geo-ai-search.md#crawler-policy", cluster: "robots",
+    });
+  }
+  const namedSearch = robots.groups.filter((g) => !g.agents.includes("*") && !disallowsRoot(g) && g.agents.some((a) => [...SEARCH_ENGINE_BOTS, ...AI_SEARCH_BOTS].map((x) => x.toLowerCase()).includes(a.toLowerCase())));
+  if (namedSearch.length && star && star.rules.some((r) => r.type === "disallow" && r.path && r.path !== "/")) {
+    add({
+      id: "GEO-006", pillar: "geo", severity: "info", confidence: "verify", file,
+      message: `Named groups (${namedSearch.flatMap((g) => g.agents).join(", ")}) replace the * rules for those bots, so the * Disallow lines (${star.rules.filter((r) => r.type === "disallow").map((r) => r.path).join(", ")}) do not apply to them.`,
+      fix: "Repeat the private-path Disallow lines inside each named group if those paths should stay uncrawled.",
+      ref: "references/geo-ai-search.md#crawler-policy", cluster: "robots",
+    });
+  }
+  if (robots.sitemaps && robots.sitemaps.length === 0) {
+    add({
+      id: "CRAWL-003", pillar: "crawlability", severity: "low", confidence: "likely", file,
+      message: "robots.txt does not reference a sitemap.",
+      fix: "Add a Sitemap: line with the absolute sitemap URL.", ref, cluster: "robots",
+    });
+  }
+  for (const o of robots.other || []) {
+    if (["noindex", "crawl-delay", "host", "clean-param"].includes(o.key)) {
+      add({
+        id: "CRAWL-018", pillar: "crawlability", severity: "info", confidence: "certain", file,
+        message: `robots.txt uses "${o.key}:", which Google ignores${o.key === "crawl-delay" ? " (Bing and Anthropic honour crawl-delay)" : ""}.`,
+        fix: o.key === "noindex" ? "Use a robots meta tag or X-Robots-Tag header to keep pages out of the index." : "Remove it or keep it knowingly for engines that support it.",
+        ref, cluster: "robots",
+      });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Generic (all stacks) code rules
+// ---------------------------------------------------------------------------
+
+const NAV_CALL_RE = /\b(router\.(push|replace)|navigate\(|goto\(|window\.location(\.href)?\s*=|location\.assign\(|history\.push)/;
+
+function checkMarkupFiles(p, add, stack) {
+  const isNext = stack.framework === "nextjs";
+  let rawImgInNext = 0;
+  let rawImgFile = null;
+  let nextImageUsed = false;
+  let lcpHintUsed = false;
+  const markupFiles = p.files.filter((f) => /\.(tsx|jsx|svelte|mdx)$/.test(f) && !/(\.test|\.spec|\.stories)\./.test(f) && !/(^|\/)(__tests__|tests?|e2e|cypress|stories)\//.test(f));
+  const altMissing = [];
+  const dimsMissing = [];
+  for (const f of markupFiles) {
+    const s = p.src(f);
+    if (!s) continue;
+    const isSvelte = f.endsWith(".svelte");
+    if (isNext && /from\s+["']next\/image["']/.test(s)) nextImageUsed = true;
+    if (/\b(priority|preload)(\s*=\s*\{?\s*true\s*\}?)?(?=[\s/>])|fetchPriority\s*=\s*["']high["']|fetchpriority\s*=\s*["']high["']|loading\s*=\s*["']eager["']/.test(s)) lcpHintUsed = true;
+
+    for (const t of findTags(s, ["img", "Image"])) {
+      if (t.name === "Image" && !(isNext && /from\s+["']next\/image["']/.test(s)) && !/from\s+["'][^"']*image[^"']*["']/i.test(s)) continue;
+      const a = parseAttrs(t.attrs);
+      if (a.__spread) continue;
+      const line = lineAt(s, t.start);
+      if (!("alt" in a)) altMissing.push(`${f}:${line}`);
+      if (t.name === "img") {
+        if (isNext) { rawImgInNext++; rawImgFile = rawImgFile || `${f}:${line}`; }
+        const sizedByCss = a.class || a.className || a.style;
+        if (!("width" in a && "height" in a) && !sizedByCss) dimsMissing.push(`${f}:${line}`);
+        if (a.loading && a.loading.value === "lazy" && /hero|banner|masthead|lcp|cover|jumbotron/i.test(t.attrs + f)) {
+          add({
+            id: "IMG-004", pillar: "technical", severity: "medium", confidence: "verify", file: f, line,
+            message: "Likely LCP image (hero/banner) is lazy-loaded, which delays Largest Contentful Paint.",
+            fix: 'Use loading="eager" and fetchpriority="high" on the above-the-fold hero image.',
+            ref: "references/on-page.md#images", cluster: f,
+          });
+        }
+      }
+      if (t.name === "Image" && isNext && (p.major("next") || 0) >= 16 && /\bpriority\b/.test(t.attrs)) {
+        add({
+          id: "META-025", pillar: "technical", severity: "info", confidence: "certain", file: f, line,
+          message: "next/image `priority` is deprecated since Next.js 16 in favour of `preload` (docs suggest loading=\"eager\" or fetchPriority=\"high\" in most cases).",
+          fix: 'Replace priority with fetchPriority="high" (or preload) on the LCP image.',
+          ref: "references/stack-nextjs.md#images", cluster: "next-image",
+        });
+      }
+    }
+
+    // Non-crawlable navigation: click handlers that navigate on non-link elements.
+    const navTags = findTags(s, ["div", "span", "li", "tr", "td", "p", "section", "article", "img", "h1", "h2", "h3", "h4", "button"]);
+    for (const t of navTags) {
+      const a = parseAttrs(t.attrs);
+      const handler = a.onClick || a["on:click"] || a.onclick;
+      if (!handler || !handler.expr || !NAV_CALL_RE.test(handler.expr)) continue;
+      const line = lineAt(s, t.start);
+      add({
+        id: "CRAWL-011", pillar: "crawlability", severity: t.name === "button" ? "low" : "medium", confidence: t.name === "button" ? "verify" : "likely",
+        file: f, line,
+        message: `<${t.name}> navigates with a click handler instead of a link. Google only follows <a href> links, so the target page loses this discovery path.`,
+        fix: isSvelte ? "Use <a href=\"/target\"> (SvelteKit handles client-side navigation)." : "Use <Link href> / <a href> for navigation; keep buttons for actions.",
+        ref: "references/crawlability.md#links", cluster: "nav-links",
+      });
+    }
+    for (const t of findTags(s, ["a"])) {
+      const a = parseAttrs(t.attrs);
+      if (a.__spread) continue;
+      const href = a.href;
+      const line = lineAt(s, t.start);
+      if (!href || (href.value !== undefined && /^(#|javascript:)/i.test(String(href.value)))) {
+        if (a.onClick || a["on:click"] || a.onclick) {
+          add({
+            id: "CRAWL-011", pillar: "crawlability", severity: "medium", confidence: "likely", file: f, line,
+            message: "<a> without a real href (missing, '#', or javascript:) used with a click handler. Crawlers cannot follow it.",
+            fix: "Give the anchor the destination URL in href and let the router intercept the click.",
+            ref: "references/crawlability.md#links", cluster: "nav-links",
+          });
+        }
+      }
+    }
+
+    // React 19: <title> children must be a single string.
+    if (/\.(tsx|jsx)$/.test(f)) {
+      const titleRe = /<title>([^<]*)<\/title>/g;
+      let m;
+      while ((m = titleRe.exec(s))) {
+        const inner = m[1].trim();
+        const singleExpr = inner.startsWith("{") && inner.endsWith("}") && balancedBlock(inner, 0)?.end === inner.length;
+        if (/\{/.test(inner) && !singleExpr) {
+          add({
+            id: "META-021", pillar: "technical", severity: "medium", confidence: "certain", file: f, line: lineAt(s, m.index),
+            message: "<title> mixes text and an expression. React requires a single string child; this renders as an array and errors (react.dev title reference).",
+            fix: "Use a template literal: <title>{`Results page ${n}`}</title>.",
+            ref: "references/stack-react.md#react-19-metadata-elements", cluster: f,
+          });
+        }
+      }
+    }
+
+    if (/\blorem ipsum\b/i.test(s)) {
+      const idx = s.search(/\blorem ipsum\b/i);
+      add({
+        id: "CONTENT-001", pillar: "content", severity: "medium", confidence: "likely", file: f, line: lineAt(s, idx),
+        message: "Placeholder text (lorem ipsum) in a rendered component.",
+        fix: "Replace with real copy or remove the block before it ships to an indexable route.",
+        ref: "references/content-and-authority.md", cluster: "placeholder-copy",
+      });
+    }
+  }
+
+  if (altMissing.length) {
+    add({
+      id: "IMG-001", pillar: "on-page", severity: "low", evidence: "high", confidence: "likely", file: altMissing[0].split(":")[0], line: Number(altMissing[0].split(":")[1]),
+      message: `${altMissing.length} image(s) have no alt attribute (SEO impact is small; accessibility impact is real). First: ${altMissing.slice(0, 5).join(", ")}`,
+      fix: 'Describe meaningful images in alt; use alt="" for decorative ones.',
+      ref: "references/on-page.md#images", cluster: "img-alt",
+    });
+  }
+  if (dimsMissing.length) {
+    add({
+      id: "IMG-002", pillar: "technical", severity: "low", confidence: "verify", file: dimsMissing[0].split(":")[0], line: Number(dimsMissing[0].split(":")[1]),
+      message: `${dimsMissing.length} <img> without width/height or a class/style that could size it, a common CLS cause. First: ${dimsMissing.slice(0, 5).join(", ")}`,
+      fix: "Add intrinsic width and height (or aspect-ratio CSS) so the browser reserves space.",
+      ref: "references/on-page.md#images", cluster: "img-dimensions",
+    });
+  }
+  if (isNext && rawImgInNext) {
+    add({
+      id: "IMG-003", pillar: "technical", severity: "low", confidence: "certain", file: rawImgFile.split(":")[0], line: Number(rawImgFile.split(":")[1]),
+      message: `${rawImgInNext} raw <img> element(s) in a Next.js app; they miss next/image sizing, lazy-loading and format negotiation.`,
+      fix: "Use next/image for content images unless there is a reason not to (e.g. SVG icons).",
+      ref: "references/stack-nextjs.md#images", cluster: "next-image",
+    });
+  }
+  if (isNext && nextImageUsed && !lcpHintUsed) {
+    add({
+      id: "IMG-005", pillar: "technical", severity: "info", confidence: "verify",
+      message: "No image anywhere is marked as high priority (preload / fetchPriority=\"high\" / loading=\"eager\"). If the LCP element is an image it is lazy-loaded by default.",
+      fix: "Mark the above-the-fold hero image on key templates.", ref: "references/stack-nextjs.md#images", cluster: "next-image",
+    });
+  }
+}
+
+function checkHeadAssets(p, add, files) {
+  for (const f of files) {
+    const s = p.src(f);
+    if (!s) continue;
+    for (const t of findTags(s, ["script"])) {
+      const a = parseAttrs(t.attrs);
+      const src = a.src && a.src.value;
+      if (!src || typeof src !== "string" || !/^https?:\/\//.test(src)) continue;
+      if (a.async || a.defer || (a.type && a.type.value === "module") || a.strategy) continue;
+      add({
+        id: "PERF-001", pillar: "technical", severity: "medium", confidence: "likely", file: f, line: lineAt(s, t.start),
+        message: `Render-blocking third-party script ${src.slice(0, 80)} (no async/defer).`,
+        fix: "Load it with async/defer (or next/script with afterInteractive/lazyOnload).",
+        ref: "references/on-page.md#core-web-vitals", cluster: "third-party-scripts",
+      });
+    }
+    for (const t of findTags(s, ["link"])) {
+      const a = parseAttrs(t.attrs);
+      const href = a.href && a.href.value;
+      if (typeof href === "string" && /fonts\.googleapis\.com\/css/.test(href) && !/display=(swap|optional|fallback)/.test(href)) {
+        add({
+          id: "PERF-002", pillar: "technical", severity: "low", confidence: "certain", file: f, line: lineAt(s, t.start),
+          message: "Google Fonts stylesheet without display=swap can delay text rendering.",
+          fix: "Append &display=swap (or self-host via next/font / @fontsource).",
+          ref: "references/on-page.md#core-web-vitals", cluster: "fonts",
+        });
+      }
+    }
+  }
+}
+
+function checkMixedContent(p, add) {
+  const hits = [];
+  for (const f of p.files) {
+    if (!/\.(tsx|jsx|svelte|html|mdx)$/.test(f)) continue;
+    const s = p.src(f);
+    if (!s) continue;
+    const re = /\b(src|href|srcSet|srcset|poster|action)\s*=\s*\{?\s*["'`](http:\/\/[^"'`\s]+)/g;
+    let m;
+    while ((m = re.exec(s))) {
+      if (/http:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|schema\.org|www\.w3\.org|ogp\.me|purl\.org)/.test(m[2])) continue;
+      hits.push(`${f}:${lineAt(s, m.index)}`);
+    }
+  }
+  if (hits.length) {
+    add({
+      id: "PERF-003", pillar: "technical", severity: "low", confidence: "likely", file: hits[0].split(":")[0], line: Number(hits[0].split(":")[1]),
+      message: `${hits.length} hard-coded http:// resource URL(s); on an HTTPS page these are mixed content. First: ${hits.slice(0, 5).join(", ")}`,
+      fix: "Use https:// or a relative URL.", ref: "references/crawlability.md#https", cluster: "mixed-content",
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Structured data
+// ---------------------------------------------------------------------------
+
+function collectStructuredData(p, stack) {
+  const sd = { files: [], types: new Map(), unescaped: [], clientOnly: [], missingContext: [] };
+  for (const f of p.files) {
+    if (!/\.(tsx|jsx|ts|js|svelte|mdx|html)$/.test(f) || /(\.test|\.spec)\./.test(f)) continue;
+    const s = p.src(f);
+    if (!s) continue;
+    const hasLd = /application\/ld\+json|script:ld\+json|["']@context["']\s*:|@context["']?\s*:\s*["']https?:\/\/schema\.org/.test(s);
+    if (!hasLd) continue;
+    sd.files.push(f);
+    const typeRe = /["']?@type["']?\s*:\s*(\[[^\]]*\]|["'`]([A-Za-z]+)["'`])/g;
+    let m;
+    while ((m = typeRe.exec(s))) {
+      const names = m[2] ? [m[2]] : [...m[1].matchAll(/["'`]([A-Za-z]+)["'`]/g)].map((x) => x[1]);
+      for (const n of names) {
+        if (!sd.types.has(n)) sd.types.set(n, []);
+        sd.types.get(n).push(`${f}:${lineAt(s, m.index)}`);
+      }
+    }
+    if (/@type/.test(s) && !/@context/.test(s) && !/script:ld\+json/.test(s)) sd.missingContext.push(f);
+    const di = /dangerouslySetInnerHTML\s*=\s*\{\{\s*__html\s*:\s*JSON\.stringify\(([\s\S]{0,400}?)\)\s*(\.replace\(|\}\})/g;
+    while ((m = di.exec(s))) {
+      if (m[2] !== ".replace(") sd.unescaped.push(`${f}:${lineAt(s, m.index)}`);
+    }
+    const svelteHtml = /\{@html[^}]*application\/ld\+json[^}]*JSON\.stringify\(([^)]*)\)(?![^}]*replace)/g;
+    while ((m = svelteHtml.exec(s))) sd.unescaped.push(`${f}:${lineAt(s, m.index)}`);
+    const isClientFile = /^\s*["']use client["']/.test(s) || /useEffect\([\s\S]{0,300}ld\+json/.test(s) || /document\.createElement\(\s*["']script["']\s*\)[\s\S]{0,200}ld\+json/.test(s);
+    if (isClientFile || (stack.framework === "react-spa" && stack.rendering.mode === "csr-only")) sd.clientOnly.push(f);
+  }
+  return sd;
+}
+
+function checkStructuredData(p, add, stack, routes, sd) {
+  const ref = "references/on-page.md#structured-data";
+  if (!sd.files.length) {
+    add({
+      id: "SD-001", pillar: "on-page", severity: "medium", evidence: "medium", confidence: "likely",
+      message: "No structured data (JSON-LD) found anywhere in the codebase.",
+      fix: "Add Organization + WebSite on the home page, BreadcrumbList on nested pages, and Article/Product/etc. where the page really is that thing. Describe only visible content.",
+      ref, cluster: "structured-data",
+    });
+  }
+  for (const loc of sd.unescaped) {
+    const [file, line] = loc.split(":");
+    add({
+      id: "SD-002", pillar: "technical", severity: "medium", confidence: "likely", file, line: Number(line),
+      message: "JSON-LD is serialised with JSON.stringify without escaping '<'. Content containing </script> can break out of the tag (XSS); Next.js docs recommend .replace(/</g, '\\\\u003c').",
+      fix: "JSON.stringify(data).replace(/</g, '\\\\u003c') or a serializer such as serialize-javascript.",
+      ref: "references/stack-nextjs.md#json-ld", cluster: "jsonld-serialiser",
+    });
+  }
+  for (const [type, locs] of sd.types) {
+    if (RETIRED_RICH_RESULT_TYPES[type]) {
+      const [file, line] = locs[0].split(":");
+      add({
+        id: "SD-003", pillar: "on-page", severity: "low", confidence: "certain", file, line: Number(line),
+        message: `${type} markup found (${locs.length}x). ${RETIRED_RICH_RESULT_TYPES[type]} It is valid schema.org but earns no Google rich result.`,
+        fix: "Keep it only if another consumer uses it; do not add more expecting a SERP feature.", ref, cluster: "structured-data",
+      });
+    }
+    if (type === "FAQPage") {
+      const [file, line] = locs[0].split(":");
+      add({
+        id: "SD-004", pillar: "on-page", severity: "info", confidence: "certain", file, line: Number(line),
+        message: "FAQPage markup found. Google stopped showing FAQ rich results for all sites on 2026-05-07. Harmless if it matches visible Q&A; no SERP benefit.",
+        fix: "No removal needed. Use QAPage for genuine single-question user Q&A pages.", ref, cluster: "structured-data",
+      });
+    }
+  }
+  if (sd.clientOnly.length) {
+    add({
+      id: "SD-005", pillar: "technical", severity: "medium", confidence: "verify", file: sd.clientOnly[0],
+      message: `JSON-LD is injected client-side in ${sd.clientOnly.length} file(s). Google can read JS-injected structured data but recommends server-rendering time-sensitive markup (e.g. Product), and many AI fetchers do not run JavaScript.`,
+      fix: "Render the <script type=\"application/ld+json\"> on the server (layout/page component or svelte:head).",
+      ref, cluster: "structured-data",
+    });
+  }
+  for (const f of sd.missingContext) {
+    add({
+      id: "SD-006", pillar: "on-page", severity: "medium", confidence: "verify", file: f,
+      message: "Structured data object has @type but no @context in this file. Without @context the block is not attached to schema.org.",
+      fix: "Add \"@context\": \"https://schema.org\" to the top-level object (unless it is merged elsewhere).", ref, cluster: "structured-data",
+    });
+  }
+  const articleRoutes = routes.filter((r) => ARTICLE_ROUTE_RE.test(r.route) && r.dynamic);
+  const hasArticleType = ["Article", "BlogPosting", "NewsArticle", "TechArticle"].some((t) => sd.types.has(t));
+  if (articleRoutes.length && !hasArticleType) {
+    add({
+      id: "SD-007", pillar: "on-page", severity: "medium", evidence: "medium", confidence: "likely", file: articleRoutes[0].file,
+      message: `Article-like routes (${articleRoutes.map((r) => r.route).slice(0, 4).join(", ")}) have no Article/BlogPosting JSON-LD (headline, author, datePublished, dateModified).`,
+      fix: "Emit Article/BlogPosting JSON-LD from the post template with author and both dates, matching visible text.",
+      ref, cluster: "structured-data",
+    });
+  }
+  return sd;
+}
+
+// ---------------------------------------------------------------------------
+// Content, authority and GEO (code-level signals only)
+// ---------------------------------------------------------------------------
+
+function checkContentAuthority(p, add, stack, routes, sd) {
+  const publicRoutes = routes.filter((r) => !r.private);
+  const has = (re) => publicRoutes.some((r) => re.test(r.route));
+  if (publicRoutes.length >= 3) {
+    if (!has(/^\/(about|about-us|company|team|who-we-are)(\/|$)/i) || !has(/^\/(contact|contact-us|support|help)(\/|$)/i)) {
+      add({
+        id: "AUTH-001", pillar: "authority", severity: "medium", evidence: "medium", confidence: "likely",
+        message: `Trust pages missing: ${[!has(/^\/(about|about-us|company|team|who-we-are)(\/|$)/i) ? "no About page" : null, !has(/^\/(contact|contact-us|support|help)(\/|$)/i) ? "no Contact page" : null].filter(Boolean).join(", ")}. Google's rater guidelines and AI engines both look for who runs a site and how to reach them.`,
+        fix: "Add a real About page (who, credentials, history) and a Contact page, linked site-wide.",
+        ref: "references/content-and-authority.md#on-site-trust-signals", cluster: "trust-pages",
+      });
+    }
+    if (!has(/^\/(privacy|privacy-policy|legal|terms|tos|terms-of-service|terms-and-conditions)(\/|$)/i)) {
+      add({
+        id: "AUTH-002", pillar: "authority", severity: "low", evidence: "medium", confidence: "likely",
+        message: "No privacy policy or terms route found.",
+        fix: "Publish privacy/terms pages and link them in the footer.",
+        ref: "references/content-and-authority.md#on-site-trust-signals", cluster: "trust-pages",
+      });
+    }
+  }
+  const orgLocs = sd.types.get("Organization") || sd.types.get("LocalBusiness") || null;
+  if (orgLocs) {
+    const anySameAs = sd.files.some((f) => /sameAs/.test(p.src(f) || ""));
+    if (!anySameAs) {
+      const [file, line] = orgLocs[0].split(":");
+      add({
+        id: "AUTH-003", pillar: "authority", severity: "low", evidence: "medium", confidence: "likely", file, line: Number(line),
+        message: "Organization markup has no sameAs links to verified profiles, which weakens entity disambiguation for search and AI engines.",
+        fix: "Add sameAs with the organisation's real, verified profiles (LinkedIn, GitHub, Crunchbase, Wikipedia if it exists).",
+        ref: "references/content-and-authority.md#entity-signals", cluster: "structured-data",
+      });
+    }
+  } else if (publicRoutes.length) {
+    add({
+      id: "AUTH-003", pillar: "authority", severity: "low", evidence: "medium", confidence: "likely",
+      message: "No Organization (or Person / LocalBusiness) entity markup found.",
+      fix: "Add Organization JSON-LD (name, url, logo, sameAs) on the home page.",
+      ref: "references/content-and-authority.md#entity-signals", cluster: "structured-data",
+    });
+  }
+  const articleRoutes = publicRoutes.filter((r) => ARTICLE_ROUTE_RE.test(r.route) && r.dynamic);
+  for (const r of articleRoutes.slice(0, 5)) {
+    const s = p.src(r.file) || "";
+    const neighbourhood = s + "\n" + siblingSources(p, r.file).join("\n");
+    const hasDate = /datePublished|dateModified|publishedAt|published_at|updatedAt|updated_at|<time\b|\bdate\b/i.test(neighbourhood);
+    const hasAuthor = /author|byline/i.test(neighbourhood);
+    if (!hasDate || !hasAuthor) {
+      add({
+        id: "CONTENT-002", pillar: "content", severity: "medium", evidence: "medium", confidence: "verify", file: r.file,
+        message: `Article template ${r.route} shows no ${[!hasDate ? "visible date" : null, !hasAuthor ? "author byline" : null].filter(Boolean).join(" or ")}. Dates and named authors are core E-E-A-T and AI-citation freshness signals.`,
+        fix: "Render author (linked to an author page) and published/updated dates with <time datetime>, and mirror them in Article JSON-LD.",
+        ref: "references/content-and-authority.md#article-templates", cluster: "article-template",
+      });
+    }
+  }
+}
+
+function siblingSources(p, file) {
+  const dir = path.posix.dirname(file);
+  return p.files.filter((f) => path.posix.dirname(f) === dir && f !== file && /\.(tsx|jsx|ts|js|svelte)$/.test(f)).map((f) => p.src(f) || "");
+}
+
+function checkSitemapAndRobotsPresence(p, add, stack, routes) {
+  const fw = stack.framework;
+  const appDir = stack.dirs.app;
+  const robotsCandidates = [
+    "public/robots.txt", "static/robots.txt",
+    ...(appDir ? [`${appDir}/robots.ts`, `${appDir}/robots.js`, `${appDir}/robots.txt`] : []),
+    "src/routes/robots.txt/+server.ts", "src/routes/robots.txt/+server.js",
+  ];
+  const sitemapCandidates = [
+    "public/sitemap.xml", "public/sitemap-index.xml", "public/sitemap_index.xml", "static/sitemap.xml",
+    ...(appDir ? [`${appDir}/sitemap.ts`, `${appDir}/sitemap.js`, `${appDir}/sitemap.xml`] : []),
+    "src/routes/sitemap.xml/+server.ts", "src/routes/sitemap.xml/+server.js",
+    "next-sitemap.config.js", "next-sitemap.config.cjs", "next-sitemap.config.mjs",
+  ];
+  const robotsFile = p.first(...robotsCandidates);
+  const sitemapFile = p.first(...sitemapCandidates) || (p.dep("next-sitemap") ? "next-sitemap (package)" : null)
+    || (p.dep("super-sitemap") ? "super-sitemap (package)" : null) || (p.dep("vite-plugin-sitemap") ? "vite-plugin-sitemap (package)" : null);
+  const pagesSitemap = stack.dirs.pages && p.files.find((f) => f.startsWith(`${stack.dirs.pages}/`) && /sitemap(\.xml)?\.(tsx|ts|js|jsx)$/.test(f));
+  const publicCount = routes.filter((r) => !r.private).length;
+
+  if (!robotsFile) {
+    add({
+      id: "CRAWL-001", pillar: "crawlability", severity: "medium", confidence: "likely",
+      message: "No robots.txt source found (public/robots.txt, static/robots.txt, app/robots.ts or a robots.txt route).",
+      fix: fw === "nextjs" && appDir ? `Add ${appDir}/robots.ts returning an allow-all rule and the sitemap URL.` : fw === "sveltekit" ? "Add static/robots.txt (or a src/routes/robots.txt/+server.ts endpoint)." : "Add public/robots.txt with a deliberate policy and Sitemap: line.",
+      ref: "references/crawlability.md#robotstxt", cluster: "robots",
+    });
+  } else {
+    const s = p.src(robotsFile) || "";
+    const gated = envGated(s);
+    const parsed = robotsFile.endsWith(".txt") ? parseRobotsTxt(s) : robotsFromCode(s);
+    if (parsed) checkRobots(add, parsed, robotsFile, gated, fw);
+  }
+  if (!sitemapFile && !pagesSitemap) {
+    add({
+      id: "CRAWL-005", pillar: "crawlability", severity: publicCount > 5 ? "medium" : "low", confidence: "likely",
+      message: `No sitemap source found for ${publicCount} public route(s).`,
+      fix: fw === "nextjs" && appDir ? `Add ${appDir}/sitemap.ts listing canonical, indexable URLs (include dynamic entries).` : fw === "sveltekit" ? "Add src/routes/sitemap.xml/+server.ts returning application/xml." : "Generate public/sitemap.xml at build time from the route list.",
+      ref: "references/crawlability.md#sitemaps", cluster: "sitemap",
+    });
+  } else if (sitemapFile && !sitemapFile.includes("(package)")) {
+    const s = p.src(sitemapFile) || "";
+    const urls = [...s.matchAll(/<loc>\s*([^<\s]+)\s*<\/loc>|url\s*:\s*["'`]([^"'`]+)["'`]/g)].map((m) => m[1] || m[2]);
+    const bad = urls.filter((u) => /localhost|127\.0\.0\.1|^\//.test(u) || (!/^https?:/.test(u) && !/\$\{/.test(u)));
+    if (bad.length) {
+      add({
+        id: "CRAWL-006", pillar: "crawlability", severity: "high", confidence: "likely", file: sitemapFile,
+        message: `Sitemap contains non-absolute or localhost URLs (${bad.slice(0, 3).join(", ")}).`,
+        fix: "Build every <loc> from the production origin (one configured SITE_URL constant).",
+        ref: "references/crawlability.md#sitemaps", cluster: "sitemap",
+      });
+    }
+    const priv = urls.filter((u) => PRIVATE_ROUTE_RE.test(u.replace(/^https?:\/\/[^/]+/, "").replace(/\$\{[^}]+\}/, "")));
+    if (priv.length) {
+      add({
+        id: "CRAWL-007", pillar: "crawlability", severity: "medium", confidence: "likely", file: sitemapFile,
+        message: `Sitemap lists private-looking URLs (${priv.slice(0, 3).join(", ")}). Sitemaps should only list canonical, indexable pages.`,
+        fix: "Remove auth/account/admin URLs from the sitemap.", ref: "references/crawlability.md#sitemaps", cluster: "sitemap",
+      });
+    }
+    if (/lastModified\s*:\s*new Date\(\s*\)/.test(s)) {
+      add({
+        id: "CRAWL-019", pillar: "crawlability", severity: "low", confidence: "certain", file: sitemapFile,
+        message: "Every sitemap entry uses lastModified: new Date() (build time). Google ignores lastmod values that are not consistently accurate.",
+        fix: "Use the content's real updated date, or omit lastModified for static pages.",
+        ref: "references/crawlability.md#sitemaps", cluster: "sitemap",
+      });
+    }
+  }
+  const llms = p.first("public/llms.txt", "static/llms.txt", ...(appDir ? [`${appDir}/llms.txt/route.ts`, `${appDir}/llms.txt/route.js`] : []), "src/routes/llms.txt/+server.ts", "src/routes/llms.txt/+server.js");
+  add({
+    id: "GEO-005", pillar: "geo", severity: "info", evidence: "experimental", confidence: "certain", file: llms,
+    message: llms ? "llms.txt present. Optional and experimental: Google says it is not needed for AI Overviews/AI Mode; other engines have not confirmed using it."
+      : "No llms.txt. That is fine: it is an experimental convention with no confirmed visibility effect. Add it only for a named consumer (e.g. developer docs used by coding agents).",
+    fix: llms ? "Keep it accurate and in sync with canonical pages, or delete it if nobody consumes it." : null,
+    ref: "references/geo-ai-search.md#llmstxt", cluster: "geo-files",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Next.js
+// ---------------------------------------------------------------------------
+
+function metadataInfo(src) {
+  const info = { hasStatic: false, hasGenerate: false, keys: new Map(), obj: null, title: null, titleTemplate: null, description: null, canonical: null, ogImages: false, line: null, robotsNoindex: false };
+  const m = src.match(/export\s+const\s+metadata\s*(?::\s*[\w.<>]+\s*)?=\s*/);
+  if (m) {
+    info.hasStatic = true;
+    info.line = lineAt(src, m.index);
+    const blk = balancedBlock(src, m.index + m[0].length);
+    if (blk) info.obj = blk.text;
+  }
+  const g = src.match(/export\s+(async\s+)?function\s+generateMetadata\b|export\s+const\s+generateMetadata\s*=/);
+  if (g) {
+    info.hasGenerate = true;
+    info.line = info.line || lineAt(src, g.index);
+    const ret = src.indexOf("return", g.index);
+    if (!info.obj && ret > 0) {
+      const blk = balancedBlock(src, ret);
+      if (blk) info.obj = blk.text;
+    }
+  }
+  if (info.obj) {
+    info.keys = topLevelKeys(info.obj);
+    const t = valueOfKey(info.obj, "title");
+    if (t) {
+      const lit = stringLiteral(t.text);
+      if (lit != null) info.title = lit;
+      else if (t.text.startsWith("{")) {
+        const d = valueOfKey(t.text, "default");
+        const tpl = valueOfKey(t.text, "template");
+        const abs = valueOfKey(t.text, "absolute");
+        if (d) info.title = stringLiteral(d.text);
+        if (abs) info.title = stringLiteral(abs.text);
+        if (tpl) info.titleTemplate = stringLiteral(tpl.text) || "(dynamic)";
+      } else info.title = "(dynamic)";
+    }
+    const d = valueOfKey(info.obj, "description");
+    if (d) info.description = stringLiteral(d.text) ?? "(dynamic)";
+    const alt = valueOfKey(info.obj, "alternates");
+    if (alt) {
+      const c = valueOfKey(alt.text, "canonical");
+      if (c) info.canonical = stringLiteral(c.text) ?? "(dynamic)";
+      info.languages = !!valueOfKey(alt.text, "languages");
+    }
+    const og = valueOfKey(info.obj, "openGraph");
+    if (og) { info.openGraph = true; info.ogImages = !!valueOfKey(og.text, "images"); info.ogUrl = valueOfKey(og.text, "url") ? stringLiteral(valueOfKey(og.text, "url").text) ?? "(dynamic)" : null; }
+    const rb = valueOfKey(info.obj, "robots");
+    if (rb && (/index\s*:\s*false/.test(rb.text) || /noindex/.test(rb.text))) info.robotsNoindex = true;
+    info.metadataBase = !!valueOfKey(info.obj, "metadataBase");
+    info.keywords = !!valueOfKey(info.obj, "keywords");
+  }
+  return info;
+}
+
+function checkNextApp(p, add, stack, routes) {
+  const appDir = stack.dirs.app;
+  const rootLayout = p.first(`${appDir}/layout.tsx`, `${appDir}/layout.jsx`, `${appDir}/layout.js`, `${appDir}/layout.ts`);
+  const layoutFiles = new Map();
+  for (const f of p.files) if (f.startsWith(`${appDir}/`) && /\/layout\.(tsx|jsx|ts|js)$/.test(f)) layoutFiles.set(path.posix.dirname(f), f);
+  const rootSrc = rootLayout ? p.src(rootLayout) : "";
+  const rootMeta = metadataInfo(rootSrc);
+  const ref = "references/stack-nextjs.md";
+
+  // Global noindex / scaffold defaults
+  if (rootMeta.robotsNoindex) {
+    const gated = envGated(rootMeta.obj || "");
+    add({
+      id: "CRAWL-008", pillar: "crawlability", severity: gated ? "info" : "critical", confidence: gated ? "verify" : "likely", file: rootLayout, line: rootMeta.line,
+      message: gated ? "Root layout sets robots noindex behind an environment check. Confirm production renders index." : "Root layout metadata sets robots index: false / noindex. Every page inherits it unless overridden.",
+      fix: "Only emit noindex on non-production deployments; production root metadata should not set index: false.",
+      ref: `${ref}#metadata-inheritance`, cluster: "root-layout",
+    });
+  }
+  if (!rootMeta.title && !routes.some((r) => metadataInfo(p.src(r.file) || "").title)) {
+    add({
+      id: "META-001", pillar: "on-page", severity: "high", confidence: "likely", file: rootLayout,
+      message: "No title defined in the root layout or any page metadata. Pages render without a <title>.",
+      fix: "Set metadata.title = { default: '<Site>', template: '%s | <Site>' } in the root layout and a title per page.",
+      ref: `${ref}#titles`, cluster: "root-layout",
+    });
+  }
+  if (rootMeta.title && DEFAULT_SCAFFOLD_TITLES.includes(String(rootMeta.title).toLowerCase())) {
+    add({
+      id: "META-002", pillar: "on-page", severity: "high", confidence: "certain", file: rootLayout, line: rootMeta.line,
+      message: `Root layout still uses the scaffold title "${rootMeta.title}".`,
+      fix: "Replace with the real site name and a title.template.", ref: `${ref}#titles`, cluster: "root-layout",
+    });
+  }
+  if (rootMeta.description && DEFAULT_SCAFFOLD_DESCRIPTIONS.includes(String(rootMeta.description).toLowerCase())) {
+    add({
+      id: "META-002", pillar: "on-page", severity: "high", confidence: "certain", file: rootLayout, line: rootMeta.line,
+      message: `Root layout still uses the scaffold description "${rootMeta.description}".`,
+      fix: "Write a real site description; give key pages their own.", ref: `${ref}#titles`, cluster: "root-layout",
+    });
+  }
+  if (rootMeta.title && rootMeta.title !== "(dynamic)" && !rootMeta.titleTemplate && routes.length > 1) {
+    add({
+      id: "META-003", pillar: "on-page", severity: "low", confidence: "likely", file: rootLayout, line: rootMeta.line,
+      message: "Root layout title is a plain string with no title.template, so page titles will not carry the brand consistently.",
+      fix: "Use title: { default: 'Brand', template: '%s | Brand' }.", ref: `${ref}#titles`, cluster: "root-layout",
+    });
+  }
+  if (rootMeta.keywords) {
+    add({
+      id: "META-022", pillar: "on-page", severity: "info", confidence: "certain", file: rootLayout, line: rootMeta.line,
+      message: "metadata.keywords is set. Google ignores the keywords meta tag; harmless but not worth maintaining.",
+      fix: null, ref: `${ref}#titles`, cluster: "root-layout",
+    });
+  }
+  if (rootLayout && !/<html\b[^>]*\blang\s*=/.test(rootSrc)) {
+    add({
+      id: "META-016", pillar: "technical", severity: "medium", confidence: "likely", file: rootLayout,
+      message: "<html> in the root layout has no lang attribute.",
+      fix: 'Add lang (e.g. <html lang="en">, or the active locale).', ref: `${ref}#root-layout`, cluster: "root-layout",
+    });
+  }
+
+  // Per-route coverage, inheritance and duplicates
+  const titleMap = new Map();
+  const descMap = new Map();
+  const noOwnTitle = [];
+  const noOwnDesc = [];
+  const noCanonical = [];
+  const ogOverwrite = [];
+  const anyMetadataBase = rootMeta.metadataBase || [...layoutFiles.values()].some((f) => metadataInfo(p.src(f) || "").metadataBase);
+  const relativeUrls = [];
+  let routesInheritingRootCanonical = [];
+  const ogImageFiles = p.files.filter((f) => f.startsWith(`${appDir}/`) && /\/(opengraph|twitter)-image\.(png|jpe?g|gif|tsx|jsx|ts|js)$/.test(f));
+
+  for (const r of routes) {
+    if (r.private) continue;
+    const src = p.src(r.file) || "";
+    const own = metadataInfo(src);
+    // Nearest non-root layout metadata on the way down
+    let inheritedTitle = null;
+    let inheritedCanonical = null;
+    let inheritedFrom = null;
+    const chain = [];
+    for (let i = r.dir.length; i >= 1; i--) {
+      const d = `${appDir}/${r.dir.slice(0, i).join("/")}`;
+      if (layoutFiles.has(d)) chain.push(layoutFiles.get(d));
+    }
+    for (const lf of chain) {
+      const li = metadataInfo(p.src(lf) || "");
+      if (!inheritedTitle && li.title) { inheritedTitle = li.title; inheritedFrom = lf; }
+      if (!inheritedCanonical && li.canonical) inheritedCanonical = li.canonical;
+    }
+    const hasOwnTitle = !!own.title || (own.hasGenerate && /title/.test(own.obj || src));
+    const hasOwnDesc = !!own.description || (own.hasGenerate && /description/.test(own.obj || src));
+    if (!hasOwnTitle && !inheritedTitle && r.route !== "/") noOwnTitle.push(r.route);
+    if (!hasOwnDesc && r.route !== "/") noOwnDesc.push(r.route);
+    if (own.title && own.title !== "(dynamic)") {
+      if (!titleMap.has(own.title)) titleMap.set(own.title, []);
+      titleMap.get(own.title).push(r.route);
+    }
+    if (own.description && own.description !== "(dynamic)") {
+      if (!descMap.has(own.description)) descMap.set(own.description, []);
+      descMap.get(own.description).push(r.route);
+    }
+    const hasAlternates = own.keys.has("alternates") || (own.hasGenerate && /alternates/.test(own.obj || src));
+    if (!hasAlternates && !inheritedCanonical) {
+      if (rootMeta.canonical && r.route !== "/") routesInheritingRootCanonical.push(r.route);
+      else if (!rootMeta.canonical) noCanonical.push(r.route);
+    }
+    if (own.openGraph && !own.ogImages && rootMeta.ogImages && !ogImageFiles.length) ogOverwrite.push(`${r.file}:${own.line}`);
+    if (!anyMetadataBase && own.obj && /(canonical|url|images)\s*:\s*["'`]\//.test(own.obj)) relativeUrls.push(r.file);
+    if (own.hasStatic || own.hasGenerate) {
+      if (/^\s*["']use client["']/.test(src)) {
+        add({
+          id: "META-020", pillar: "technical", severity: "high", confidence: "certain", file: r.file, line: own.line,
+          message: "metadata/generateMetadata exported from a 'use client' file. The Metadata API is Server Component only, so this metadata is ignored.",
+          fix: "Move metadata to a server page/layout and keep the interactive part in a child client component.",
+          ref: `${ref}#metadata-inheritance`, cluster: r.file,
+        });
+      }
+    }
+    if (/from\s+["']next\/head["']/.test(src)) {
+      add({
+        id: "META-019", pillar: "technical", severity: "high", confidence: "certain", file: r.file,
+        message: "next/head is imported in an App Router page. It has no effect in app/; the tags are never rendered.",
+        fix: "Use export const metadata or generateMetadata.", ref: `${ref}#titles`, cluster: r.file,
+      });
+    }
+    // Client-side fetched primary content
+    if (/^\s*["']use client["']/.test(src) && /useEffect\s*\(/.test(src) && /\bfetch\s*\(|axios|useSWR|useQuery/.test(src)) {
+      add({
+        id: "CRAWL-010", pillar: "crawlability", severity: "high", confidence: "verify", file: r.file,
+        message: `Route ${r.route} is a client component that fetches its data after mount. The initial HTML (what non-JS crawlers and AI fetchers see) has no primary content.`,
+        fix: "Fetch on the server (async Server Component or generateStaticParams) and pass data to a client child only for interactivity.",
+        ref: `${ref}#rendering`, cluster: r.file,
+      });
+    }
+    // Soft 404 on dynamic routes
+    if (r.dynamic && /(await\s+\w+|fetch\s*\(|prisma\.|db\.|findUnique|findFirst|getPost|getProduct)/.test(src) && !/\bnotFound\s*\(/.test(src) && !/generateStaticParams/.test(src)) {
+      add({
+        id: "CRAWL-014", pillar: "crawlability", severity: "medium", confidence: "verify", file: r.file,
+        message: `Dynamic route ${r.route} loads a record but never calls notFound(). Unknown slugs may render an empty page with HTTP 200 (soft 404).`,
+        fix: "if (!record) notFound() from next/navigation.", ref: `${ref}#not-found`, cluster: "dynamic-404",
+      });
+    }
+  }
+
+  if (routesInheritingRootCanonical.length) {
+    add({
+      id: "META-010", pillar: "technical", severity: "high", confidence: "likely", file: rootLayout, line: rootMeta.line,
+      message: `Root layout sets alternates.canonical = "${rootMeta.canonical}". Metadata is inherited, so ${routesInheritingRootCanonical.length} route(s) without their own alternates (${routesInheritingRootCanonical.slice(0, 5).join(", ")}) declare the home page as canonical and can drop out of the index.`,
+      fix: "Remove canonical from the root layout and set alternates.canonical per page (relative path + metadataBase), e.g. alternates: { canonical: '/pricing' }.",
+      ref: `${ref}#metadata-inheritance`, cluster: "root-layout",
+    });
+  }
+  if (rootMeta.ogUrl && rootMeta.ogUrl !== "(dynamic)" && routes.length > 1) {
+    add({
+      id: "META-014", pillar: "on-page", severity: "low", confidence: "likely", file: rootLayout, line: rootMeta.line,
+      message: `Root layout sets openGraph.url = "${rootMeta.ogUrl}", inherited by pages that do not set their own openGraph; shares of those pages point at that URL.`,
+      fix: "Drop openGraph.url from the root layout or set it per page.", ref: `${ref}#metadata-inheritance`, cluster: "root-layout",
+    });
+  }
+  if (noOwnTitle.length) {
+    add({
+      id: "META-003", pillar: "on-page", severity: noOwnTitle.length > 2 ? "medium" : "low", confidence: "likely", file: rootLayout,
+      message: `${noOwnTitle.length} public route(s) define no title of their own and fall back to the root default, so they share one title: ${noOwnTitle.slice(0, 8).join(", ")}.`,
+      fix: "Export metadata (or generateMetadata for dynamic routes) with a unique title in each page.",
+      ref: `${ref}#titles`, cluster: "per-route-metadata",
+    });
+  }
+  if (noOwnDesc.length > 1) {
+    add({
+      id: "META-005", pillar: "on-page", severity: "low", confidence: "likely", file: rootLayout,
+      message: `${noOwnDesc.length} public route(s) have no description of their own: ${noOwnDesc.slice(0, 8).join(", ")}.`,
+      fix: "Add a page-specific description to each indexable route.", ref: `${ref}#titles`, cluster: "per-route-metadata",
+    });
+  }
+  if (!rootMeta.description && !routes.some((r) => metadataInfo(p.src(r.file) || "").description)) {
+    add({
+      id: "META-005", pillar: "on-page", severity: "medium", confidence: "likely", file: rootLayout,
+      message: "No meta description anywhere (root layout or pages).",
+      fix: "Add a site default description in the root layout and specific ones per page.", ref: `${ref}#titles`, cluster: "root-layout",
+    });
+  }
+  for (const [t, rs] of titleMap) if (rs.length > 1) add({ id: "META-004", pillar: "on-page", severity: "medium", confidence: "certain", message: `Duplicate title "${t}" on ${rs.join(", ")}.`, fix: "Make each title describe its own page.", ref: `${ref}#titles`, cluster: "per-route-metadata" });
+  for (const [d, rs] of descMap) if (rs.length > 1) add({ id: "META-006", pillar: "on-page", severity: "low", confidence: "certain", message: `Duplicate description "${d.slice(0, 60)}..." on ${rs.join(", ")}.`, fix: "Write a page-specific description.", ref: `${ref}#titles`, cluster: "per-route-metadata" });
+  if (noCanonical.length) {
+    add({
+      id: "META-009", pillar: "technical", severity: "low", confidence: "likely",
+      message: `${noCanonical.length} public route(s) declare no canonical URL: ${noCanonical.slice(0, 8).join(", ")}. Self-referencing canonicals help when query strings or trailing-slash variants exist.`,
+      fix: "Set alternates.canonical per page (relative path with metadataBase in the root layout).",
+      ref: `${ref}#metadata-inheritance`, cluster: "per-route-metadata",
+    });
+  }
+  if (ogOverwrite.length) {
+    add({
+      id: "META-014", pillar: "on-page", severity: "medium", confidence: "likely", file: ogOverwrite[0].split(":")[0],
+      message: `${ogOverwrite.length} page(s) define openGraph without images. Next.js merges metadata shallowly, so the page's openGraph object replaces the root one and the share image is dropped.`,
+      fix: "Spread shared fields (openGraph: { ...sharedOpenGraph, title }) or add opengraph-image files.",
+      ref: `${ref}#metadata-inheritance`, cluster: "per-route-metadata",
+    });
+  }
+  if (!anyMetadataBase) {
+    add({
+      id: "META-015", pillar: "technical", severity: relativeUrls.length ? "high" : "low", confidence: "likely", file: rootLayout,
+      message: relativeUrls.length
+        ? `metadataBase is not set but relative URL metadata is used (${relativeUrls.slice(0, 3).join(", ")}); Next.js fails the build or emits wrong absolute URLs.`
+        : "metadataBase is not set in the root layout. Canonicals and OG images then need hard-coded absolute URLs everywhere.",
+      fix: "metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? 'https://example.com') in the root layout.",
+      ref: `${ref}#metadata-inheritance`, cluster: "root-layout",
+    });
+  }
+
+  // not-found
+  if (!p.first(`${appDir}/not-found.tsx`, `${appDir}/not-found.jsx`, `${appDir}/not-found.js`, `${appDir}/not-found.ts`)) {
+    add({
+      id: "CRAWL-015", pillar: "crawlability", severity: "low", confidence: "certain",
+      message: "No app/not-found file. The default 404 works (status 404) but offers no navigation back into the site.",
+      fix: `Add ${appDir}/not-found.tsx with links to key sections.`, ref: `${ref}#not-found`, cluster: "not-found",
+    });
+  }
+
+  // Streaming metadata vs AI crawlers
+  const cfgSrc = stack.rendering.config ? p.src(stack.rendering.config) || "" : "";
+  const dynamicMetaRoutes = routes.filter((r) => !r.private && metadataInfo(p.src(r.file) || "").hasGenerate && !/generateStaticParams/.test(p.src(r.file) || ""));
+  if (dynamicMetaRoutes.length && !/htmlLimitedBots\s*:/.test(cfgSrc) && stack.rendering.mode !== "static-export") {
+    add({
+      id: "GEO-003", pillar: "geo", severity: "medium", evidence: "medium", confidence: "verify", file: stack.rendering.config || rootLayout,
+      message: `${dynamicMetaRoutes.length} route(s) use generateMetadata without generateStaticParams (${dynamicMetaRoutes.slice(0, 4).map((r) => r.route).join(", ")}). When rendered dynamically (including partial prerendering), Next.js streams that metadata into <body> for every user agent outside its htmlLimitedBots list. The default list covers Bingbot, social unfurlers and Google's non-rendering crawlers; it does not include Googlebot (which renders JS, so Google is fine) or GPTBot, OAI-SearchBot, ClaudeBot, Claude-SearchBot and PerplexityBot, which generally do not run JS.`,
+      fix: "Confirm with seo-scan fetch --compare-ua. Fix by prerendering the route (generateStaticParams; metadata is then resolved at build time) or by setting htmlLimitedBots to the Next default pattern plus GPTBot|OAI-SearchBot|ChatGPT-User|ClaudeBot|Claude-SearchBot|Claude-User|PerplexityBot|Perplexity-User (the option replaces the default list). Both verified on next@16.4.5.",
+      ref: `${ref}#streaming-metadata-and-ai-crawlers`, cluster: "next-config",
+    });
+  }
+
+  // i18n / hreflang
+  const localeSegment = routes.some((r) => r.dir && /^\[(locale|lang|lng|language)\]$/.test(r.dir[0] || ""));
+  if ((stack.i18n.length || localeSegment) && !p.files.some((f) => /\.(tsx|jsx|ts|js)$/.test(f) && /languages\s*:|hreflang|hrefLang/.test(p.src(f) || ""))) {
+    add({
+      id: "META-024", pillar: "technical", severity: "medium", confidence: "likely",
+      message: `The app is localised (${[...stack.i18n, localeSegment ? "[locale] segment" : null].filter(Boolean).join(", ")}) but no hreflang alternates are emitted.`,
+      fix: "Set alternates.languages per page (self-referencing, reciprocal, plus x-default) or add <xhtml:link> alternates to the sitemap.",
+      ref: "references/crawlability.md#international", cluster: "i18n",
+    });
+  }
+
+  // Proxy/middleware intercepting robots/sitemap
+  checkNextProxy(p, add);
+}
+
+function checkNextProxy(p, add) {
+  const proxy = p.first("proxy.ts", "proxy.js", "src/proxy.ts", "src/proxy.js", "middleware.ts", "middleware.js", "src/middleware.ts", "src/middleware.js");
+  if (!proxy) return;
+  const s = p.src(proxy) || "";
+  if (!/redirect|rewrite|NextResponse\.(redirect|rewrite)|auth\(|withAuth|clerkMiddleware|authMiddleware/.test(s)) return;
+  const matcher = s.match(/matcher\s*:\s*(\[[\s\S]*?\]|["'`][^"'`]*["'`])/);
+  const entries = matcher ? [...matcher[1].matchAll(/["'`]([^"'`]+)["'`]/g)].map((m) => m[1]) : [];
+  const excludes = entries.some((e) => /robots|sitemap/.test(e));
+  // Scoped = every matcher entry starts with a literal first segment (/dashboard/:path*),
+  // not a root catch-all (/:path*, /(.*), /((?!...).*)).
+  const scoped = entries.length > 0 && entries.every((e) => /^\/[A-Za-z0-9_-]+(\/|$)/.test(e));
+  if (excludes || scoped) return;
+  add({
+    id: "CRAWL-016", pillar: "crawlability", severity: "medium", confidence: "verify", file: proxy,
+    message: `${path.posix.basename(proxy)} redirects/rewrites/authenticates on a broad matcher that does not exclude robots.txt and sitemap.xml. Crawlers may get a redirect or login page instead of the files.`,
+    fix: "Exclude robots.txt, sitemap.xml (and other metadata files) from the matcher, then verify with seo-scan fetch.",
+    ref: "references/stack-nextjs.md#proxy-and-middleware", cluster: "proxy",
+  });
+  if (/middleware\.(ts|js)$/.test(proxy)) {
+    add({
+      id: "META-026", pillar: "technical", severity: "info", confidence: "certain", file: proxy,
+      message: "middleware.* is deprecated in Next.js 16 and renamed to proxy.*.", fix: "Rename when upgrading (see the proxy migration doc).",
+      ref: "references/stack-nextjs.md#proxy-and-middleware", cluster: "proxy",
+    });
+  }
+}
+
+function checkNextPages(p, add, stack, routes) {
+  const pagesDir = stack.dirs.pages;
+  const doc = p.first(`${pagesDir}/_document.tsx`, `${pagesDir}/_document.jsx`, `${pagesDir}/_document.js`);
+  if (doc && !/<Html\b[^>]*\blang\s*=/.test(p.src(doc) || "") && !/i18n\s*:/.test(p.src(stack.rendering.config || "") || "")) {
+    add({ id: "META-016", pillar: "technical", severity: "medium", confidence: "likely", file: doc, message: "<Html> in _document has no lang attribute.", fix: 'Add <Html lang="en">.', ref: "references/stack-nextjs.md#pages-router", cluster: "document" });
+  }
+  const noTitle = [];
+  const titles = new Map();
+  for (const r of routes) {
+    if (r.private || r.special) continue;
+    const s = p.src(r.file) || "";
+    const m = s.match(/<title>([^<{]+)<\/title>/);
+    const hasTitle = /<title\b|title\s*=|NextSeo|<Seo\b|<SEO\b|<Meta\b|<PageHead\b|<Head\b[\s\S]*?title/.test(s);
+    if (!hasTitle) noTitle.push(r.route);
+    if (m) { if (!titles.has(m[1].trim())) titles.set(m[1].trim(), []); titles.get(m[1].trim()).push(r.route); }
+    if (r.dynamic && /getServerSideProps/.test(s) && !/notFound\s*:\s*true/.test(s)) {
+      add({ id: "CRAWL-014", pillar: "crawlability", severity: "medium", confidence: "verify", file: r.file, message: `Dynamic route ${r.route} never returns { notFound: true } from getServerSideProps; missing records may render with 200.`, fix: "Return { notFound: true } when the record is missing.", ref: "references/stack-nextjs.md#not-found", cluster: "dynamic-404" });
+    }
+  }
+  if (noTitle.length) add({ id: "META-003", pillar: "on-page", severity: noTitle.length > 2 ? "medium" : "low", confidence: "verify", message: `${noTitle.length} Pages Router route(s) set no title via next/head or an SEO component: ${noTitle.slice(0, 8).join(", ")}.`, fix: "Render a shared <Seo title description canonical /> component (next/head) on every page.", ref: "references/stack-nextjs.md#pages-router", cluster: "per-route-metadata" });
+  for (const [t, rs] of titles) if (rs.length > 1) add({ id: "META-004", pillar: "on-page", severity: "medium", confidence: "certain", message: `Duplicate title "${t}" on ${rs.join(", ")}.`, fix: "Make each title page-specific.", ref: "references/stack-nextjs.md#pages-router", cluster: "per-route-metadata" });
+}
+
+// ---------------------------------------------------------------------------
+// SvelteKit
+// ---------------------------------------------------------------------------
+
+function svelteHeadInfo(src) {
+  const blocks = [...src.matchAll(/<svelte:head>([\s\S]*?)<\/svelte:head>/g)];
+  const head = blocks.map((b) => b[1]).join("\n");
+  const titleM = head.match(/<title>([\s\S]*?)<\/title>/);
+  return {
+    hasHead: blocks.length > 0,
+    title: titleM ? titleM[1].trim() : null,
+    titleFromData: !!(titleM && /\b(\$?page)\.data\b|\bdata\.(title|seo|meta)/.test(titleM[1])),
+    description: /<meta\b[^>]*name=["']description["']/.test(head),
+    canonical: /<link\b[^>]*rel=["']canonical["']/.test(head),
+    canonicalFromUrl: /<link\b[^>]*rel=["']canonical["'][^>]*\{\$?page\.url/.test(head) || /<link\b[^>]*\{\$?page\.url[^}]*\}[^>]*rel=["']canonical["']/.test(head),
+    og: /og:title|og:image/.test(head),
+    jsonLd: /ld\+json/.test(head),
+    line: blocks.length ? lineAt(src, blocks[0].index) : null,
+  };
+}
+
+function importsSeoComponent(p, file) {
+  const s = p.src(file) || "";
+  const imports = [...s.matchAll(/import\s+(\w+)\s+from\s+["']([^"']+\.svelte)["']/g)];
+  for (const [, name, spec] of imports) {
+    if (!new RegExp(`<${name}\\b`).test(s)) continue;
+    let target = null;
+    if (spec.startsWith(".")) target = path.posix.normalize(path.posix.join(path.posix.dirname(file), spec));
+    else if (/^(\$lib|#lib)\//.test(spec)) target = spec.replace(/^(\$lib|#lib)/, "src/lib");
+    if (target && p.has(target) && /<svelte:head>/.test(p.src(target) || "")) return target;
+  }
+  return null;
+}
+
+function checkSvelteKit(p, add, stack, routes) {
+  const ref = "references/stack-sveltekit.md";
+  const appHtml = p.first("src/app.html");
+  if (appHtml) {
+    const s = p.src(appHtml) || "";
+    if (!/<html\b[^>]*\blang\s*=\s*["'][^"']+["']/.test(s)) add({ id: "META-016", pillar: "technical", severity: "medium", confidence: "certain", file: appHtml, message: "src/app.html <html> has no (or an empty) lang attribute.", fix: 'Set <html lang="en"> (or %lang% via handle for i18n).', ref: `${ref}#app-html`, cluster: "app-html" });
+    if (!/name=["']viewport["']/.test(s)) add({ id: "META-017", pillar: "technical", severity: "medium", confidence: "certain", file: appHtml, message: "src/app.html has no viewport meta tag (mobile-first indexing).", fix: '<meta name="viewport" content="width=device-width, initial-scale=1" />', ref: `${ref}#app-html`, cluster: "app-html" });
+    if (/<meta\b[^>]*name=["']robots["'][^>]*noindex/.test(s)) add({ id: "CRAWL-008", pillar: "crawlability", severity: "critical", confidence: "certain", file: appHtml, message: "src/app.html hard-codes a robots noindex for every page.", fix: "Remove it; emit noindex per page via svelte:head only where intended.", ref: `${ref}#app-html`, cluster: "app-html" });
+  }
+
+  // Rendering mode
+  if (/^csr-only/.test(stack.rendering.mode)) {
+    const f = p.first("src/routes/+layout.ts", "src/routes/+layout.js", "src/routes/+layout.server.ts", "src/routes/+layout.server.js");
+    add({ id: "CRAWL-009", pillar: "crawlability", severity: "critical", confidence: "certain", file: f, message: "Root layout sets ssr = false: every page is served as an empty shell and rendered only in the browser. Non-JS crawlers and most AI fetchers see no content or metadata.", fix: "Remove ssr = false (or scope it to the few routes that truly need browser-only rendering); prefer prerender = true for static pages.", ref: `${ref}#rendering`, cluster: "root-layout" });
+  } else if (/^spa-fallback/.test(stack.rendering.mode)) {
+    add({ id: "CRAWL-009", pillar: "crawlability", severity: "high", confidence: "likely", file: stack.rendering.config, message: "adapter-static is configured with a fallback page (SPA mode). The adapter docs warn this has large negative SEO/performance impact for pages that are not prerendered.", fix: "Prerender every public page (export const prerender = true in the root layout plus entries() for dynamic routes); keep fallback only for app-only routes.", ref: `${ref}#rendering`, cluster: "svelte-config" });
+  }
+  if (stack.rendering.trailingSlash === "ignore") {
+    add({ id: "CRAWL-017", pillar: "crawlability", severity: "medium", confidence: "certain", message: "trailingSlash = 'ignore' makes /x and /x/ two separate URLs (SvelteKit docs advise against it).", fix: "Use the default 'never' (or 'always') consistently and match canonicals/sitemap.", ref: `${ref}#urls`, cluster: "root-layout" });
+  }
+
+  const layouts = p.files.filter((f) => /^src\/routes\/(.*\/)?\+layout\.svelte$/.test(f));
+  const rootLayout = p.first("src/routes/+layout.svelte");
+  const rootHead = rootLayout ? svelteHeadInfo(p.src(rootLayout) || "") : { hasHead: false };
+  const anyHead = p.files.some((f) => f.endsWith(".svelte") && /<svelte:head>/.test(p.src(f) || ""));
+  const anyHeadTitle = p.files.some((f) => f.endsWith(".svelte") && svelteHeadInfo(p.src(f) || "").title);
+  if (!anyHeadTitle) {
+    add({ id: "META-001", pillar: "on-page", severity: "high", confidence: "certain", file: rootLayout || "src/app.html", message: anyHead ? "No <title> inside any <svelte:head>: every page renders without a title (SvelteKit adds none by default)." : "No <svelte:head> anywhere: pages have no <title>, description or canonical (SvelteKit adds none by default).", fix: "Add a reusable Seo.svelte with <svelte:head> (title, description, canonical, OG) and render it from each page, or return seo data from load and render it in the root layout.", ref: `${ref}#titles`, cluster: "seo-component" });
+  }
+
+  const noTitle = [];
+  const noDesc = [];
+  const noCanonical = [];
+  const titles = new Map();
+  for (const r of routes) {
+    if (r.private) continue;
+    const s = p.src(r.file) || "";
+    let info = svelteHeadInfo(s);
+    const viaComp = importsSeoComponent(p, r.file);
+    if (!info.hasHead && viaComp) info = { ...svelteHeadInfo(p.src(viaComp) || ""), viaComponent: viaComp };
+    const passesTitleProp = /<\w+\b[^>]*\btitle\s*=/.test(s);
+    let covered = info.title || (info.viaComponent && passesTitleProp);
+    // Layout chain with a data-driven title counts as per-route only if the load provides it.
+    if (!covered) {
+      const chain = layouts.filter((l) => r.file.startsWith(path.posix.dirname(l) + "/"));
+      const dataTitle = chain.some((l) => svelteHeadInfo(p.src(l) || "").titleFromData);
+      if (dataTitle) {
+        const loads = siblingSources(p, r.file).join("\n");
+        covered = /title\s*:/.test(loads);
+      }
+    }
+    if (!covered) noTitle.push(r.route);
+    if (!info.description && !(info.viaComponent && /\bdescription\s*=/.test(s)) && !rootHead.description) noDesc.push(r.route);
+    if (!info.canonical && !rootHead.canonical) noCanonical.push(r.route);
+    if (info.title && !/[{}]/.test(info.title)) {
+      if (!titles.has(info.title)) titles.set(info.title, []);
+      titles.get(info.title).push(r.route);
+    }
+    // Page-level ssr = false
+    for (const sib of ["+page.ts", "+page.js"].map((x) => path.posix.join(path.posix.dirname(r.file), x)).filter((x) => p.has(x))) {
+      if (exportConst(p.src(sib) || "", "ssr") === "false" && !/^csr-only/.test(stack.rendering.mode)) {
+        add({ id: "CRAWL-009", pillar: "crawlability", severity: "high", confidence: "certain", file: sib, message: `Route ${r.route} sets ssr = false; its initial HTML is an empty shell.`, fix: "Remove ssr = false unless this route must not render on the server; move browser-only code into onMount.", ref: `${ref}#rendering`, cluster: sib });
+      }
+    }
+    // Client-only data fetching
+    if (/onMount\s*\([\s\S]{0,400}\bfetch\s*\(/.test(s) && !siblingSources(p, r.file).some((x) => /export\s+(async\s+)?(function|const)\s+load\b/.test(x))) {
+      add({ id: "CRAWL-010", pillar: "crawlability", severity: "high", confidence: "verify", file: r.file, message: `Route ${r.route} fetches its content in onMount, so the server-rendered HTML lacks it.`, fix: "Move the fetch into a load function in +page.ts / +page.server.ts.", ref: `${ref}#rendering`, cluster: r.file });
+    }
+    // Dynamic route 404 handling
+    if (r.dynamic) {
+      const loads = siblingSources(p, r.file).filter((x) => /export\s+(async\s+)?(function|const)\s+load\b/.test(x));
+      if (loads.length && !loads.some((x) => /\berror\s*\(\s*404/.test(x)) && !/prerender\s*=\s*true/.test(loads.join("\n"))) {
+        add({ id: "CRAWL-014", pillar: "crawlability", severity: "medium", confidence: "verify", file: r.file, message: `Dynamic route ${r.route} has a load function that never throws error(404). Unknown params may render an empty page with 200.`, fix: "if (!record) error(404, 'Not found') in load.", ref: `${ref}#errors`, cluster: "dynamic-404" });
+      }
+    }
+    if (info.canonicalFromUrl) {
+      add({ id: "META-012", pillar: "technical", severity: "low", confidence: "verify", file: info.viaComponent || r.file, message: "Canonical is built from page.url, i.e. from the incoming request. Behind a proxy (or when prerendering without an origin) this can emit http:// or internal hostnames.", fix: "Build canonicals from a configured site origin constant + page.url.pathname (SvelteKit 3: paths.origin; 2.x: ORIGIN / prerender.origin).", ref: `${ref}#canonical`, cluster: "seo-component" });
+    }
+  }
+  if (anyHeadTitle && noTitle.length) add({ id: "META-003", pillar: "on-page", severity: noTitle.length > 2 ? "medium" : "low", confidence: "likely", message: `${noTitle.length} public route(s) have no title of their own: ${noTitle.slice(0, 8).join(", ")}.`, fix: "Render the Seo component (or <svelte:head><title>) in each +page.svelte, or return title from load for a data-driven root head.", ref: `${ref}#titles`, cluster: "per-route-metadata" });
+  if (anyHeadTitle && noDesc.length) add({ id: "META-005", pillar: "on-page", severity: noDesc.length > 2 ? "medium" : "low", confidence: "likely", message: `${noDesc.length} public route(s) have no meta description: ${noDesc.slice(0, 8).join(", ")}.`, fix: "Pass a page-specific description to the Seo component.", ref: `${ref}#titles`, cluster: "per-route-metadata" });
+  if (anyHeadTitle && noCanonical.length) add({ id: "META-009", pillar: "technical", severity: "low", confidence: "likely", message: `${noCanonical.length} public route(s) declare no canonical: ${noCanonical.slice(0, 8).join(", ")}.`, fix: "Emit <link rel=\"canonical\"> from the Seo component using the configured origin + pathname.", ref: `${ref}#canonical`, cluster: "per-route-metadata" });
+  for (const [t, rs] of titles) if (rs.length > 1) add({ id: "META-004", pillar: "on-page", severity: "medium", confidence: "certain", message: `Duplicate title "${t}" on ${rs.join(", ")}.`, fix: "Make each title page-specific.", ref: `${ref}#titles`, cluster: "per-route-metadata" });
+
+  if (!p.has("src/routes/+error.svelte")) add({ id: "CRAWL-015", pillar: "crawlability", severity: "low", confidence: "certain", message: "No src/routes/+error.svelte; the default error page offers no way back into the site.", fix: "Add +error.svelte with navigation links (status codes stay correct).", ref: `${ref}#errors`, cluster: "not-found" });
+
+  const hooks = p.first("src/hooks.server.ts", "src/hooks.server.js");
+  if (hooks && /redirect\s*\(\s*30[1278]/.test(p.src(hooks) || "") && !/robots|sitemap/.test(p.src(hooks) || "")) {
+    add({ id: "CRAWL-016", pillar: "crawlability", severity: "medium", confidence: "verify", file: hooks, message: "hooks.server redirects requests without an exception for robots.txt/sitemap.xml. If the redirect applies to anonymous visitors, crawlers get it too.", fix: "Skip the redirect for robots.txt, sitemap.xml and public routes; verify with seo-scan fetch.", ref: `${ref}#hooks`, cluster: "hooks" });
+  }
+  const localeSegment = routes.some((r) => /\[\[?(lang|locale|lng)(=[^\]]+)?\]\]?/.test(r.file));
+  if ((stack.i18n.length || localeSegment) && !p.files.some((f) => /\.(svelte|ts|js)$/.test(f) && /hreflang/.test(p.src(f) || ""))) {
+    add({ id: "META-024", pillar: "technical", severity: "medium", confidence: "likely", message: "The app is localised but no hreflang alternates are emitted.", fix: "Emit reciprocal <link rel=\"alternate\" hreflang> (plus x-default) in svelte:head, or in the sitemap.", ref: "references/crawlability.md#international", cluster: "i18n" });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// React SPA (Vite/CRA) and React Router framework
+// ---------------------------------------------------------------------------
+
+function checkReactSpa(p, add, stack, routes) {
+  const ref = "references/stack-react.md";
+  const indexHtml = p.first("index.html", "public/index.html");
+  const s = indexHtml ? p.src(indexHtml) || "" : "";
+  const title = (s.match(/<title>([\s\S]*?)<\/title>/) || [])[1];
+  if (indexHtml) {
+    if (!title || !title.trim()) add({ id: "META-001", pillar: "on-page", severity: "high", confidence: "certain", file: indexHtml, message: "index.html has no <title>.", fix: "Add a real site title (it is also the fallback for every route).", ref: `${ref}#index-html`, cluster: "index-html" });
+    else if (DEFAULT_SCAFFOLD_TITLES.includes(title.trim().toLowerCase()) || (p.pkg.name && title.trim() === p.pkg.name && /^[a-z0-9@/._-]+$/.test(title.trim()))) add({ id: "META-002", pillar: "on-page", severity: "high", confidence: "certain", file: indexHtml, line: lineAt(s, s.indexOf("<title>")), message: `index.html still has the scaffold title "${title.trim()}"${title.trim() === p.pkg.name ? " (the npm package name)" : ""}. Every route that does not override it shows this in search results.`, fix: "Replace with the real site title.", ref: `${ref}#index-html`, cluster: "index-html" });
+    if (!/name=["']description["']/.test(s)) add({ id: "META-005", pillar: "on-page", severity: "medium", confidence: "certain", file: indexHtml, message: "index.html has no meta description.", fix: "Add a site-level fallback description.", ref: `${ref}#index-html`, cluster: "index-html" });
+    if (!/<html\b[^>]*\blang\s*=\s*["'][^"']+["']/.test(s)) add({ id: "META-016", pillar: "technical", severity: "medium", confidence: "certain", file: indexHtml, message: "index.html <html> has no lang attribute.", fix: 'Add <html lang="en">.', ref: `${ref}#index-html`, cluster: "index-html" });
+    if (!/name=["']viewport["']/.test(s)) add({ id: "META-017", pillar: "technical", severity: "medium", confidence: "certain", file: indexHtml, message: "index.html has no viewport meta tag.", fix: '<meta name="viewport" content="width=device-width, initial-scale=1" />', ref: `${ref}#index-html`, cluster: "index-html" });
+    const canon = s.match(/<link\b[^>]*rel=["']canonical["'][^>]*>/);
+    if (canon && routes.length > 1) add({ id: "META-011", pillar: "technical", severity: "high", confidence: "likely", file: indexHtml, line: lineAt(s, canon.index), message: "index.html hard-codes a canonical. In a SPA every route is served from this file, so every URL declares the same canonical unless JS replaces it, and Google says a JS-changed canonical must match the raw one.", fix: "Remove the static canonical from index.html; emit per-route canonicals from prerendered/SSR HTML.", ref: `${ref}#index-html`, cluster: "index-html" });
+    if (/<meta\b[^>]*name=["']robots["'][^>]*noindex/.test(s)) add({ id: "CRAWL-008", pillar: "crawlability", severity: "critical", confidence: "certain", file: indexHtml, message: "index.html hard-codes robots noindex; in a SPA this applies to every route.", fix: "Remove it.", ref: `${ref}#index-html`, cluster: "index-html" });
+  }
+  if (stack.rendering.mode === "csr-only") {
+    add({ id: "CRAWL-009", pillar: "crawlability", severity: "critical", confidence: "likely", file: indexHtml, message: `Client-side-rendered SPA with no prerendering: the server returns index.html with an empty root for ${routes.length ? `all ${routes.length} routes` : "every route"}. Google renders JS later (queue), but non-JS crawlers, link unfurlers and most AI fetchers see no content and only the index.html title/description.`, fix: "Prerender public routes (React Router framework mode prerender, vite-react-ssg, or a prerender plugin) or move to SSR (Next.js / React Router framework). Keep CSR only for authenticated app screens.", ref: `${ref}#csr-and-prerendering`, cluster: "rendering" });
+  }
+  const hashRouter = p.files.find((f) => /\.(tsx|jsx|ts|js)$/.test(f) && /\b(HashRouter|createHashRouter)\b/.test(p.src(f) || ""));
+  if (hashRouter) add({ id: "CRAWL-012", pillar: "crawlability", severity: "high", confidence: "certain", file: hashRouter, message: "Hash-based routing (/#/page). Google does not treat fragment URLs as separate pages.", fix: "Use BrowserRouter / createBrowserRouter with server rewrites, plus prerendering.", ref: "references/crawlability.md#links", cluster: "rendering" });
+
+  if (p.dep("react-helmet") && !p.dep("react-helmet-async")) {
+    add({ id: "META-018", pillar: "technical", severity: "medium", confidence: "certain", message: "react-helmet is unmaintained and not concurrent-safe.", fix: (p.major("react") || 0) >= 19 ? "Use React 19's native <title>/<meta>/<link> elements (hoisted to <head>)." : "Switch to react-helmet-async with HelmetProvider.", ref: `${ref}#react-19-metadata-elements`, cluster: "metadata-lib" });
+  }
+  const perRoute = p.files.some((f) => /\.(tsx|jsx)$/.test(f) && f !== indexHtml && (/<Helmet\b|<title>|<title\s|document\.title\s*=|useHead|<Seo\b|<SEO\b/.test(p.src(f) || "")));
+  if (routes.length > 1 && !perRoute) {
+    add({ id: "META-003", pillar: "on-page", severity: "high", confidence: "likely", file: indexHtml, message: `${routes.length} routes but no per-route metadata mechanism (no React 19 <title>, Helmet, or document.title). Every URL shares the index.html title and description.`, fix: (p.major("react") || 0) >= 19 ? "Render <title>, <meta name=\"description\">, <link rel=\"canonical\"> inside each route component (React 19 hoists them), and prerender so they exist in the initial HTML." : "Add react-helmet-async with a shared <Seo> component, and prerender.", ref: `${ref}#react-19-metadata-elements`, cluster: "per-route-metadata" });
+  }
+  const docTitle = p.files.find((f) => /\.(tsx|jsx|ts|js)$/.test(f) && /document\.title\s*=/.test(p.src(f) || ""));
+  if (docTitle) add({ id: "META-023", pillar: "technical", severity: "low", confidence: "certain", file: docTitle, message: "document.title is set imperatively; it only exists after JS runs and is invisible to non-JS fetchers.", fix: "Use React 19 <title> (or Helmet) and prerender.", ref: `${ref}#react-19-metadata-elements`, cluster: "per-route-metadata" });
+
+  // SPA host fallback -> soft 404
+  const hostFiles = ["vercel.json", "netlify.toml", "public/_redirects", "_redirects", "firebase.json", "static.json", "staticwebapp.config.json", "public/staticwebapp.config.json"].filter((f) => p.has(f));
+  for (const hf of hostFiles) {
+    const hs = p.src(hf) || "";
+    if (/\/index\.html/.test(hs) && /(\/\*|\(\.\*\)|\*\*|"source"\s*:\s*"\/\(\.\*\)"|navigationFallback)/.test(hs)) {
+      add({ id: "CRAWL-013", pillar: "crawlability", severity: "high", confidence: "likely", file: hf, message: `${hf} rewrites every path to index.html with status 200, so unknown URLs are soft 404s (200 + "not found" UI).`, fix: "Prerender known routes and return a real 404 for unknown paths (or, per Google, add noindex to the client-side 404 view).", ref: "references/crawlability.md#status-codes", cluster: "hosting" });
+    }
+  }
+  const catchAll = p.files.find((f) => /\.(tsx|jsx)$/.test(f) && /path\s*=\s*\{?\s*["']\*["']|path\s*:\s*["']\*["']/.test(p.src(f) || ""));
+  if (catchAll && stack.rendering.mode === "csr-only") {
+    const cs = p.src(catchAll) || "";
+    if (!/noindex/.test(cs)) add({ id: "CRAWL-013", pillar: "crawlability", severity: "medium", confidence: "verify", file: catchAll, message: "Client-side catch-all 404 route without noindex. On a CSR SPA the server answers 200 for every path.", fix: 'Render <meta name="robots" content="noindex"> in the NotFound component (Google-documented SPA soft-404 fix).', ref: "references/crawlability.md#status-codes", cluster: "hosting" });
+  }
+}
+
+function checkReactRouterFramework(p, add, stack, routes) {
+  const ref = "references/stack-react.md";
+  const root = p.first("app/root.tsx", "app/root.jsx", "app/root.ts", "app/root.js");
+  const rs = root ? p.src(root) || "" : "";
+  const metaExports = p.files.filter((f) => f.startsWith("app/") && /export\s+(const|function)\s+meta\b/.test(p.src(f) || ""));
+  if (metaExports.length && root && !/<Meta\s*\/?>/.test(rs)) {
+    add({ id: "META-019", pillar: "technical", severity: "high", confidence: "certain", file: root, message: `${metaExports.length} route module(s) export meta, but root does not render <Meta />, so those tags never reach the document.`, fix: "Render <Meta /> inside <head> in app/root, or move to React 19 <title>/<meta> elements (recommended by React Router since React 19).", ref: `${ref}#react-router-framework`, cluster: "root" });
+  }
+  if (root && !/<html\b[^>]*\blang\s*=/.test(rs)) add({ id: "META-016", pillar: "technical", severity: "medium", confidence: "likely", file: root, message: "<html> in app/root has no lang attribute.", fix: 'Add lang="en".', ref: `${ref}#react-router-framework`, cluster: "root" });
+  if (/^spa/.test(stack.rendering.mode)) {
+    add({ id: "CRAWL-009", pillar: "crawlability", severity: stack.rendering.mode.includes("prerender") ? "medium" : "high", confidence: "likely", file: stack.rendering.config, message: `React Router config has ssr: false (${stack.rendering.mode}). Only prerendered paths ship content in the initial HTML.`, fix: "Add every public path (including dynamic ones) to prerender, or enable ssr.", ref: `${ref}#react-router-framework`, cluster: "rendering" });
+  }
+  const noMeta = routes.filter((r) => !r.private && r.file && !/(export\s+(const|function)\s+meta\b|<title\b)/.test(p.src(r.file) || ""));
+  if (noMeta.length && routes.length > 1) add({ id: "META-003", pillar: "on-page", severity: noMeta.length > 2 ? "medium" : "low", confidence: "verify", message: `${noMeta.length} route definition file(s) without meta export or <title>: ${noMeta.slice(0, 6).map((r) => r.route).join(", ")}.`, fix: "Give each route module its own title/description.", ref: `${ref}#react-router-framework`, cluster: "per-route-metadata" });
+}
+
+// ---------------------------------------------------------------------------
+// Orchestration
+// ---------------------------------------------------------------------------
+
+export function routesFor(p, stack) {
+  if (stack.framework === "nextjs") {
+    return [...(stack.dirs.app ? nextAppRoutes(p, stack.dirs.app) : []), ...(stack.dirs.pages ? nextPagesRoutes(p, stack.dirs.pages) : [])];
+  }
+  if (stack.framework === "sveltekit") return svelteKitRoutes(p);
+  if (stack.framework === "react-spa" || stack.framework === "react-router-framework") {
+    const rr = reactRoutes(p);
+    if (stack.framework === "react-router-framework") {
+      // map route("path", "file") definitions to their module files
+      const routesTs = p.first("app/routes.ts", "app/routes.js");
+      if (routesTs) {
+        const s = p.src(routesTs) || "";
+        for (const m of s.matchAll(/route\(\s*["'`]([^"'`]*)["'`]\s*,\s*["'`]([^"'`]+)["'`]/g)) {
+          const r = rr.find((x) => x.route === (m[1].startsWith("/") ? m[1] : `/${m[1]}`));
+          if (r) r.file = path.posix.join("app", m[2]);
+        }
+        for (const m of s.matchAll(/index\(\s*["'`]([^"'`]+)["'`]/g)) {
+          const r = rr.find((x) => x.route === "/");
+          if (r) r.file = path.posix.join("app", m[1]);
+        }
+      }
+    }
+    return rr;
+  }
+  return [];
+}
+
+/**
+ * Run every static check for the project at rootDir.
+ * Returns { scanner, project, stack, routes, findings, coverage }.
+ */
+export function scanProject(rootDir, { only = null } = {}) {
+  const p = loadProject(rootDir);
+  const stack = detectStack(p);
+  const routes = routesFor(p, stack);
+  const { findings, add } = makeCollector();
+
+  if (stack.framework === "unknown") {
+    add({ id: "STACK-000", pillar: "technical", severity: "info", confidence: "certain", message: "No React, Next.js or SvelteKit app detected at this root. If this is a monorepo, run `seo-scan.mjs detect --workspace` and scan the app directory.", ref: "SKILL.md#step-1", cluster: "stack" });
+  }
+  checkSitemapAndRobotsPresence(p, add, stack, routes);
+  if (stack.framework === "nextjs") {
+    if (stack.dirs.app) checkNextApp(p, add, stack, routes.filter((r) => r.file.startsWith(`${stack.dirs.app}/`)));
+    if (stack.dirs.pages) checkNextPages(p, add, stack, routes.filter((r) => r.file.startsWith(`${stack.dirs.pages}/`)));
+    if (!stack.dirs.app) checkNextProxy(p, add);
+  } else if (stack.framework === "sveltekit") checkSvelteKit(p, add, stack, routes);
+  else if (stack.framework === "react-spa") checkReactSpa(p, add, stack, routes);
+  else if (stack.framework === "react-router-framework") checkReactRouterFramework(p, add, stack, routes);
+
+  checkMarkupFiles(p, add, stack);
+  const headFiles = ["index.html", "public/index.html", "src/app.html", "app/root.tsx", "app/root.jsx",
+    ...(stack.dirs.app ? [`${stack.dirs.app}/layout.tsx`, `${stack.dirs.app}/layout.jsx`, `${stack.dirs.app}/layout.js`] : []),
+    ...(stack.dirs.pages ? [`${stack.dirs.pages}/_document.tsx`, `${stack.dirs.pages}/_document.jsx`, `${stack.dirs.pages}/_document.js`] : []),
+    "src/routes/+layout.svelte"].filter((f) => p.has(f));
+  checkHeadAssets(p, add, headFiles);
+  checkMixedContent(p, add);
+  const sd = collectStructuredData(p, stack);
+  checkStructuredData(p, add, stack, routes, sd);
+  checkContentAuthority(p, add, stack, routes, sd);
+
+  // Snippet controls applied broadly
+  for (const f of headFiles) {
+    const s = p.src(f) || "";
+    if (/nosnippet|max-snippet\s*[:=]\s*["']?0\b|maxSnippet\s*:\s*0/.test(s)) {
+      add({ id: "GEO-004", pillar: "geo", severity: "medium", confidence: "likely", file: f, message: "A site-wide nosnippet / max-snippet:0 directive. Google uses snippet eligibility for AI Overviews/AI Mode, so these pages cannot be quoted there (or shown with a snippet).", fix: "Remove it unless this is a deliberate exclusion; use data-nosnippet on specific passages instead.", ref: "references/geo-ai-search.md#eligibility-and-controls", cluster: "snippet-controls" });
+    }
+  }
+
+  let out = findings;
+  if (only) {
+    const set = new Set(String(only).split(",").map((x) => x.trim()));
+    out = findings.filter((f) => set.has(f.pillar));
+  }
+  out.sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity) || a.id.localeCompare(b.id));
+
+  return {
+    scanner: { name: "seo-scan", version: SCANNER_VERSION, mode: "static" },
+    project: { root: p.root, name: p.pkg.name || null, files: p.files.length },
+    stack,
+    routes: routes.map(({ route, file, dynamic, private: priv }) => ({ route, file, dynamic, private: priv })),
+    findings: out,
+    coverage: {
+      checkedStatically: ["robots/sitemap sources", "global + per-route metadata sources", "rendering mode", "structured data in code", "link/image markup", "trust pages and entity markup", "AI crawler policy in robots"],
+      needsRenderedHtml: ["actual <head> output per route", "canonical/robots values after rendering", "visible word count, H1s", "soft-404 behaviour", "streamed-metadata placement for AI user agents"],
+      notAssessable: ["off-site authority (backlinks, brand mentions, reviews)", "field Core Web Vitals (CrUX/Search Console)", "index coverage (Search Console)", "actual AI citations (needs repeated prompt benchmarks)"],
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// HTML analysis (built output or fetched pages)
+// ---------------------------------------------------------------------------
+
+const ENTITY_MAP = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", "#39": "'" };
+function decodeEntities(s) {
+  return String(s).replace(/&(#x[0-9a-f]+|#\d+|\w+);/gi, (m, e) => {
+    if (e[0] === "#") {
+      const code = e[1].toLowerCase() === "x" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : m;
+    }
+    return ENTITY_MAP[e.toLowerCase()] ?? m;
+  });
+}
+
+function htmlAttrs(tagText) {
+  const out = {};
+  for (const m of tagText.matchAll(/([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*(?:=\s*("([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g)) {
+    out[m[1].toLowerCase()] = m[3] ?? m[4] ?? m[5] ?? "";
+  }
+  return out;
+}
+
+/** Extract SEO-relevant facts from one HTML document. */
+export function analyzeHtml(html) {
+  const doc = String(html || "");
+  const lower = doc.toLowerCase();
+  const headEnd = lower.indexOf("</head>");
+  const titleIdx = lower.indexOf("<title");
+  const titleM = doc.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
+  const metas = [...doc.matchAll(/<meta\b[^>]*>/gi)].map((m) => ({ ...htmlAttrs(m[0].slice(5)), __index: m.index }));
+  const links = [...doc.matchAll(/<link\b[^>]*>/gi)].map((m) => ({ ...htmlAttrs(m[0].slice(5)), __index: m.index }));
+  const meta = (name) => metas.find((m) => (m.name || "").toLowerCase() === name || (m.property || "").toLowerCase() === name);
+  const canonicals = links.filter((l) => (l.rel || "").toLowerCase().split(/\s+/).includes("canonical"));
+  const hreflangs = links.filter((l) => (l.rel || "").toLowerCase() === "alternate" && l.hreflang);
+  const robotsMeta = metas.filter((m) => ["robots", "googlebot"].includes((m.name || "").toLowerCase())).map((m) => (m.content || "").toLowerCase());
+  const htmlTag = doc.match(/<html\b[^>]*>/i);
+  const lang = htmlTag ? htmlAttrs(htmlTag[0].slice(5)).lang || null : null;
+  const jsonLd = [];
+  for (const m of doc.matchAll(/<script\b[^>]*type\s*=\s*["']?application\/ld\+json["']?[^>]*>([\s\S]*?)<\/script>/gi)) {
+    let parsed = null; let error = null;
+    try { parsed = JSON.parse(m[1]); } catch (e) { error = e.message; }
+    const types = [];
+    const ctx = [];
+    const visit = (o) => {
+      if (Array.isArray(o)) { o.forEach(visit); return; }
+      if (!o || typeof o !== "object") return;
+      if (o["@type"]) types.push(...[].concat(o["@type"]));
+      if (o["@context"]) ctx.push(o["@context"]);
+      if (o["@graph"]) visit(o["@graph"]);
+    };
+    if (parsed) visit(parsed);
+    jsonLd.push({ ok: !!parsed, error, types, hasContext: ctx.length > 0, inHead: headEnd < 0 || m.index < headEnd });
+  }
+  const body = (doc.match(/<body\b[^>]*>([\s\S]*)<\/body>/i) || [null, doc])[1];
+  const text = decodeEntities(body
+    .replace(/<(script|style|noscript|template|svg)\b[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<[^>]+>/g, " "))
+    .replace(/\s+/g, " ").trim();
+  const words = text ? text.split(" ").filter((w) => /[\p{L}\p{N}]/u.test(w)).length : 0;
+  const h1s = [...body.matchAll(/<h1\b[^>]*>([\s\S]*?)<\/h1>/gi)].map((m) => decodeEntities(m[1].replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim());
+  const imgs = [...body.matchAll(/<img\b[^>]*>/gi)].map((m) => htmlAttrs(m[0].slice(4)));
+  const anchors = [...body.matchAll(/<a\b[^>]*>/gi)].map((m) => htmlAttrs(m[0].slice(2)));
+  const shellRoot = /<div\b[^>]*\bid\s*=\s*["'](root|app|__next|svelte)["'][^>]*>\s*<\/div>/i.test(body);
+  return {
+    title: titleM ? decodeEntities(titleM[1]).replace(/\s+/g, " ").trim() : null,
+    titleInHead: titleIdx >= 0 && (headEnd < 0 || titleIdx < headEnd),
+    description: meta("description") ? decodeEntities(meta("description").content || "") : null,
+    descriptionInHead: meta("description") ? headEnd < 0 || meta("description").__index < headEnd : null,
+    canonicals: canonicals.map((c) => c.href),
+    hreflangs: hreflangs.map((h) => ({ hreflang: h.hreflang, href: h.href })),
+    robots: robotsMeta,
+    lang,
+    viewport: !!meta("viewport"),
+    og: { title: meta("og:title")?.content || null, image: meta("og:image")?.content || null, url: meta("og:url")?.content || null },
+    twitterCard: meta("twitter:card")?.content || null,
+    jsonLd,
+    h1s,
+    words,
+    imgsMissingAlt: imgs.filter((i) => !("alt" in i)).length,
+    imgs: imgs.length,
+    anchors: anchors.length,
+    anchorsWithoutHref: anchors.filter((a) => !a.href || /^(#|javascript:)/i.test(a.href)).length,
+    shellRoot,
+    nosnippet: robotsMeta.some((r) => /nosnippet|max-snippet:\s*0\b/.test(r)),
+  };
+}
+
+/** Findings for a set of analysed pages: [{label, url?, status?, headers?, facts}] */
+export function htmlFindings(pages, { expectStatus = 200 } = {}) {
+  const { findings, add } = makeCollector();
+  const ref = "references/triage-and-reporting.md#rendered-html-checks";
+  const titleMap = new Map();
+  const descMap = new Map();
+  const canonMap = new Map();
+  for (const pg of pages) {
+    const f = pg.facts;
+    const at = pg.label;
+    if (pg.probe) {
+      // A made-up URL: only its status matters.
+      if (pg.status === 200 && f.robots.some((r) => /noindex/.test(r))) add({ id: "HTML-SOFT404-NOINDEX", pillar: "crawlability", severity: "low", confidence: "certain", file: at, message: "A made-up URL returned HTTP 200 but with robots noindex (e.g. Next.js notFound() after streaming started). Google drops it from the index; non-Google crawlers still see a 200.", fix: "Acceptable. For a real 404, resolve the record before streaming starts (outside <Suspense>, or prerender known params).", ref: "references/stack-nextjs.md#not-found", cluster: "status" });
+      else if (pg.status === 200) add({ id: "HTML-SOFT404", pillar: "crawlability", severity: "high", confidence: "certain", file: at, message: `A made-up URL returned HTTP 200 (${f.title ? `title "${f.title}"` : "no title"}). Unknown paths under this prefix are soft 404s.`, fix: "Return 404 for unknown paths (notFound() / error(404) / data(…, { status: 404 }) / a real host 404), or add noindex to the client-side 404 view.", ref: "references/crawlability.md#status-codes", cluster: "status" });
+      else if (pg.status >= 300 && pg.status < 400) add({ id: "HTML-PROBE-REDIRECT", pillar: "crawlability", severity: "medium", confidence: "certain", file: at, message: `A made-up URL redirects (${pg.status} -> ${pg.location || "?"}) instead of returning 404. Google tends to treat redirects of dead URLs to unrelated pages (login, home) as soft 404s, and crawlers waste requests on them.`, fix: "Let unknown public paths fall through to the framework's 404; only redirect paths that really require auth.", ref: "references/crawlability.md#status-codes", cluster: "status" });
+      continue;
+    }
+    if (pg.status && pg.status !== expectStatus) add({ id: "HTML-STATUS", pillar: "crawlability", severity: pg.status >= 500 ? "critical" : "high", confidence: "certain", file: at, message: `HTTP ${pg.status} for a page expected to be indexable.`, fix: "Fix the route or remove it from links/sitemap.", ref, cluster: "status" });
+    const xRobots = pg.headers && (pg.headers["x-robots-tag"] || "");
+    if (xRobots && /noindex/i.test(xRobots)) add({ id: "HTML-XROBOTS", pillar: "crawlability", severity: "critical", confidence: "certain", file: at, message: `X-Robots-Tag: ${xRobots} header on an indexable page.`, fix: "Remove the header in production (often a hosting/preview setting).", ref, cluster: "headers" });
+    if (f.shellRoot && f.words < 40) add({ id: "HTML-SHELL", pillar: "crawlability", severity: "critical", confidence: "certain", file: at, message: `Initial HTML is an empty app shell (${f.words} words, empty root element). Non-JS crawlers and AI fetchers see no content.`, fix: "Server-render or prerender this route.", ref, cluster: "rendering" });
+    else if (f.words < 150) add({ id: "HTML-THIN", pillar: "content", severity: "info", confidence: "verify", file: at, message: `Only ${f.words} words of visible text in the initial HTML. Fine for some page types; thin for articles, product and service pages.`, fix: "Check the page answers its query fully in server-rendered text.", ref: "references/content-and-authority.md#helpful-content-checks", cluster: "content" });
+    if (!f.title) add({ id: "HTML-TITLE", pillar: "on-page", severity: "high", confidence: "certain", file: at, message: "No <title> in the HTML.", fix: "Emit a unique title server-side.", ref, cluster: "metadata" });
+    else {
+      if (!f.titleInHead) add({ id: "HTML-TITLE-BODY", pillar: "geo", severity: "medium", confidence: "certain", file: at, message: `<title> is emitted after </head> (streamed metadata). Parsers that only read <head> miss it${pg.uaKey ? ` (fetched as ${pg.uaKey})` : ""}.`, fix: "For Next.js add the bot to htmlLimitedBots or make the route static; otherwise render metadata before the body.", ref: "references/stack-nextjs.md#streaming-metadata-and-ai-crawlers", cluster: "metadata" });
+      if (f.title.length > 65 || f.title.length < 10) add({ id: "HTML-TITLE-LEN", pillar: "on-page", severity: "info", confidence: "certain", file: at, message: `Title is ${f.title.length} characters ("${f.title.slice(0, 70)}"). Rough lint only: Google truncates by pixel width.`, fix: null, ref, cluster: "metadata" });
+      if (!pg.variant) { if (!titleMap.has(f.title)) titleMap.set(f.title, []); titleMap.get(f.title).push(at); }
+    }
+    if (!f.description) add({ id: "HTML-DESC", pillar: "on-page", severity: "low", confidence: "certain", file: at, message: "No meta description.", fix: "Add a page-specific description.", ref, cluster: "metadata" });
+    else if (!pg.variant) { if (!descMap.has(f.description)) descMap.set(f.description, []); descMap.get(f.description).push(at); }
+    if (f.robots.some((r) => /noindex/.test(r))) add({ id: "HTML-NOINDEX", pillar: "crawlability", severity: "critical", confidence: "certain", file: at, message: `robots meta: ${f.robots.join(" | ")}.`, fix: "Remove noindex if the page should rank.", ref, cluster: "metadata" });
+    if (f.nosnippet) add({ id: "HTML-NOSNIPPET", pillar: "geo", severity: "medium", confidence: "certain", file: at, message: "nosnippet / max-snippet:0 present: no snippet and no use as AI Overview/AI Mode input on Google.", fix: "Remove unless deliberate.", ref: "references/geo-ai-search.md#eligibility-and-controls", cluster: "metadata" });
+    if (f.canonicals.length > 1) add({ id: "HTML-CANON-MULTI", pillar: "technical", severity: "high", confidence: "certain", file: at, message: `${f.canonicals.length} canonical tags (${f.canonicals.join(", ")}). Google ignores conflicting canonicals.`, fix: "Emit exactly one.", ref, cluster: "canonical" });
+    for (const c of f.canonicals) {
+      if (!/^https:\/\//.test(c || "")) add({ id: "HTML-CANON-BAD", pillar: "technical", severity: /localhost|127\.0\.0\.1/.test(c || "") ? "high" : "medium", confidence: "certain", file: at, message: `Canonical "${c}" is not an absolute https URL${/localhost|127\.0\.0\.1/.test(c || "") ? " (it follows the request host, so it is not pinned to the production origin; behind a proxy it can leak internal hosts or http://)" : ""}.`, fix: "Build canonicals from the configured production origin.", ref, cluster: "canonical" });
+      if (!pg.variant) { if (!canonMap.has(c)) canonMap.set(c, []); canonMap.get(c).push(at); }
+    }
+    if (!f.canonicals.length) add({ id: "HTML-CANON-NONE", pillar: "technical", severity: "low", confidence: "certain", file: at, message: "No canonical link.", fix: "Add a self-referencing canonical.", ref, cluster: "canonical" });
+    if (!f.lang) add({ id: "HTML-LANG", pillar: "technical", severity: "medium", confidence: "certain", file: at, message: "<html> has no lang.", fix: "Set lang.", ref, cluster: "document" });
+    if (!f.viewport) add({ id: "HTML-VIEWPORT", pillar: "technical", severity: "medium", confidence: "certain", file: at, message: "No viewport meta tag.", fix: "Add it.", ref, cluster: "document" });
+    {
+      if (f.h1s.length === 0 && !f.shellRoot) add({ id: "HTML-H1", pillar: "on-page", severity: "low", confidence: "certain", file: at, message: "No <h1> in the initial HTML.", fix: "Give the page one descriptive main heading.", ref, cluster: "headings" });
+      if (f.h1s.length > 1) add({ id: "HTML-H1-MULTI", pillar: "on-page", severity: "info", confidence: "certain", file: at, message: `${f.h1s.length} <h1> elements (${f.h1s.slice(0, 3).join(" / ")}). Valid HTML; only a problem if the main topic becomes ambiguous.`, fix: null, ref, cluster: "headings" });
+      if (!f.og.title || !f.og.image) add({ id: "HTML-OG", pillar: "on-page", severity: "low", confidence: "certain", file: at, message: `Open Graph incomplete (og:title ${f.og.title ? "ok" : "missing"}, og:image ${f.og.image ? "ok" : "missing"}).`, fix: "Add og:title, og:description, og:image (absolute URL).", ref, cluster: "metadata" });
+      else if (!/^https?:\/\//.test(f.og.image)) add({ id: "HTML-OG", pillar: "on-page", severity: "medium", confidence: "certain", file: at, message: `og:image is relative ("${f.og.image}"); social and chat unfurlers need an absolute URL.`, fix: "Use an absolute URL (metadataBase in Next.js).", ref, cluster: "metadata" });
+    }
+    for (const j of f.jsonLd) {
+      if (!j.ok) add({ id: "HTML-JSONLD-INVALID", pillar: "on-page", severity: "high", confidence: "certain", file: at, message: `JSON-LD block does not parse: ${j.error}.`, fix: "Serialise with JSON.stringify (escaping <).", ref, cluster: "structured-data" });
+      else if (!j.hasContext) add({ id: "HTML-JSONLD-CONTEXT", pillar: "on-page", severity: "medium", confidence: "certain", file: at, message: `JSON-LD (${j.types.join(", ") || "no @type"}) has no @context.`, fix: 'Add "@context": "https://schema.org".', ref, cluster: "structured-data" });
+      for (const t of j.types) if (RETIRED_RICH_RESULT_TYPES[t]) add({ id: "HTML-JSONLD-RETIRED", pillar: "on-page", severity: "low", confidence: "certain", file: at, message: `${t}: ${RETIRED_RICH_RESULT_TYPES[t]}`, fix: null, ref, cluster: "structured-data" });
+    }
+    if (f.imgsMissingAlt) add({ id: "HTML-ALT", pillar: "on-page", severity: "low", confidence: "certain", file: at, message: `${f.imgsMissingAlt} of ${f.imgs} <img> without alt.`, fix: 'Add alt text (alt="" for decorative).', ref, cluster: "images" });
+  }
+  for (const [t, ls] of titleMap) if (ls.length > 1) add({ id: "HTML-TITLE-DUP", pillar: "on-page", severity: "medium", confidence: "certain", message: `Same title "${t}" on ${ls.length} pages: ${ls.slice(0, 6).join(", ")}.`, fix: "Write page-specific titles.", ref, cluster: "metadata" });
+  for (const [d, ls] of descMap) if (ls.length > 1) add({ id: "HTML-DESC-DUP", pillar: "on-page", severity: "low", confidence: "certain", message: `Same description on ${ls.length} pages: ${ls.slice(0, 6).join(", ")} ("${d.slice(0, 60)}...").`, fix: "Write page-specific descriptions.", ref, cluster: "metadata" });
+  for (const [c, ls] of canonMap) if (ls.length > 1) add({ id: "HTML-CANON-COLLIDE", pillar: "technical", severity: "high", confidence: "certain", message: `${ls.length} different pages declare the same canonical ${c}: ${ls.slice(0, 6).join(", ")}. All but one are asking to be dropped from the index.`, fix: "Make each page's canonical self-referencing.", ref, cluster: "canonical" });
+  findings.sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity) || a.id.localeCompare(b.id));
+  return findings;
+}
+
+/** Collect *.html files under the given paths. */
+export function collectHtmlFiles(paths) {
+  const out = [];
+  for (const p of paths) {
+    const abs = path.resolve(p);
+    let st;
+    try { st = fs.statSync(abs); } catch { continue; }
+    if (st.isFile() && /\.html?$/i.test(abs)) out.push(abs);
+    else if (st.isDirectory()) {
+      const stack = [abs];
+      while (stack.length) {
+        const d = stack.pop();
+        for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+          const full = path.join(d, e.name);
+          if (e.isDirectory() && e.name !== "node_modules") stack.push(full);
+          else if (e.isFile() && /\.html?$/i.test(e.name)) out.push(full);
+        }
+      }
+    }
+  }
+  return out.sort();
+}
+
+export function scanHtmlFiles(paths) {
+  const files = collectHtmlFiles(paths);
+  const bases = paths.map((p) => path.resolve(p)).filter((p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
+  const labelFor = (f) => {
+    const base = bases.find((b) => f.startsWith(b + path.sep));
+    return toPosix(base ? path.relative(base, f) : path.basename(f));
+  };
+  const pages = files.map((f) => ({ label: labelFor(f), facts: analyzeHtml(fs.readFileSync(f, "utf8")) }));
+  return {
+    scanner: { name: "seo-scan", version: SCANNER_VERSION, mode: "html" },
+    pages: pages.map((p) => ({ label: p.label, title: p.facts.title, canonicals: p.facts.canonicals, words: p.facts.words, h1s: p.facts.h1s.length, jsonLdTypes: p.facts.jsonLd.flatMap((j) => j.types) })),
+    findings: htmlFindings(pages),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Live fetch (own sites only)
+// ---------------------------------------------------------------------------
+
+export const USER_AGENTS = {
+  browser: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36",
+  googlebot: "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+  bingbot: "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm) Chrome/140.0 Safari/537.36",
+  gptbot: "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; GPTBot/1.3; +https://openai.com/gptbot",
+  "oai-searchbot": "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; OAI-SearchBot/1.3; +https://openai.com/searchbot",
+  claudebot: "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; ClaudeBot/1.0; +claudebot@anthropic.com)",
+  "claude-searchbot": "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Claude-SearchBot/1.0; +https://www.anthropic.com)",
+  perplexitybot: "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)",
+};
+
+function isLocalHost(hostname) {
+  return /^(localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|\[?::1\]?|[\w-]+\.local|[\w-]+\.localhost)$/i.test(hostname);
+}
+
+async function fetchOnce(url, ua, timeoutMs) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { headers: { "user-agent": USER_AGENTS[ua] || ua, accept: "text/html,application/xhtml+xml" }, redirect: "manual", signal: ctrl.signal });
+    const headers = {};
+    res.headers.forEach((v, k) => { headers[k] = v; });
+    const body = res.status >= 300 && res.status < 400 ? "" : await res.text();
+    return { status: res.status, headers, body };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/**
+ * Fetch pages from a running site (dev/preview/prod you own). Probes a random
+ * path for soft 404s and checks robots.txt / sitemap.xml are served as files.
+ * Remote hosts require allowRemote: page content is untrusted data.
+ */
+export async function fetchPages(urls, { uas = ["browser"], allowRemote = false, probe404 = true, timeoutMs = 15000 } = {}) {
+  const pages = [];
+  const variants = [];
+  const extra = [];
+  const origins = new Set();
+  const probePrefixes = new Set();
+  for (const u of urls) {
+    const url = new URL(u);
+    if (!/^https?:$/.test(url.protocol)) throw new Error(`Only http(s) URLs are supported: ${u}`);
+    if (!isLocalHost(url.hostname) && !allowRemote) throw new Error(`Refusing to fetch remote host ${url.hostname} without --allow-remote (only fetch sites you own or are authorised to test).`);
+    origins.add(url.origin);
+    const segs = url.pathname.split("/").filter(Boolean);
+    probePrefixes.add(url.origin + "/");
+    if (segs.length >= 2) probePrefixes.add(`${url.origin}/${segs.slice(0, -1).join("/")}/`);
+    // The first user agent is the base view; the rest are compared against it.
+    for (let i = 0; i < uas.length; i++) {
+      const ua = uas[i];
+      const r = await fetchOnce(url.href, ua, timeoutMs);
+      const pg = { label: url.pathname, url: url.href, uaKey: ua, variant: i > 0, status: r.status, headers: r.headers, location: r.headers.location || null, facts: analyzeHtml(r.body) };
+      if (i === 0) pages.push(pg);
+      variants.push(pg);
+    }
+  }
+  if (probe404) {
+    for (const prefix of [...probePrefixes].slice(0, 6)) {
+      const probeUrl = `${prefix}seo-scan-probe-${Date.now().toString(36)}-does-not-exist`;
+      const r = await fetchOnce(probeUrl, uas[0], timeoutMs);
+      pages.push({ label: `${new URL(probeUrl).pathname} [404 probe]`, url: probeUrl, probe: true, status: r.status, location: r.headers.location || null, headers: r.headers, facts: analyzeHtml(r.body) });
+    }
+  }
+  for (const origin of origins) {
+    for (const file of ["/robots.txt", "/sitemap.xml"]) {
+      const r = await fetchOnce(origin + file, uas[0], timeoutMs);
+      extra.push({ url: origin + file, status: r.status, contentType: r.headers["content-type"] || null, location: r.headers.location || null, bytes: r.body.length, robots: file === "/robots.txt" && r.status === 200 && !/html/.test(r.headers["content-type"] || "") ? parseRobotsTxt(r.body) : undefined });
+    }
+  }
+  const findings = htmlFindings(pages);
+  const { add, findings: more } = makeCollector();
+  for (const e of extra) {
+    const isRobots = e.url.endsWith("/robots.txt");
+    if (e.status >= 300 && e.status < 400) add({ id: "LIVE-REDIRECT", pillar: "crawlability", severity: "high", confidence: "certain", file: e.url, message: `${isRobots ? "robots.txt" : "sitemap.xml"} redirects (${e.status} -> ${e.location}). A login/proxy redirect here hides it from crawlers.`, fix: "Serve it directly with 200; exclude it from auth middleware/proxy.", ref: "references/crawlability.md#robotstxt", cluster: "proxy" });
+    else if (e.status !== 200) add({ id: "LIVE-MISSING", pillar: "crawlability", severity: isRobots ? (e.status >= 500 ? "critical" : "medium") : "medium", confidence: "certain", file: e.url, message: `${isRobots ? "robots.txt" : "sitemap.xml"} returned HTTP ${e.status}.${isRobots && e.status >= 500 ? " Google treats a 5xx robots.txt as disallow-all." : ""}`, fix: "Serve the file with 200.", ref: "references/crawlability.md#robotstxt", cluster: "robots" });
+    else if (isRobots && /html/.test(e.contentType || "")) add({ id: "LIVE-ROBOTS-HTML", pillar: "crawlability", severity: "medium", confidence: "certain", file: e.url, message: `robots.txt is served as ${e.contentType} (an HTML fallback page, so no robots.txt exists). Crawlers treat it as allow-all with no sitemap hint.`, fix: "Add a real robots.txt to the static/public directory so the SPA fallback does not answer for it.", ref: "references/crawlability.md#robotstxt", cluster: "robots" });
+    else if (!isRobots && !/xml/.test(e.contentType || "")) add({ id: "LIVE-SITEMAP-TYPE", pillar: "crawlability", severity: "medium", confidence: "certain", file: e.url, message: `sitemap.xml served as ${e.contentType} (likely an HTML fallback page, not XML).`, fix: "Serve real XML with application/xml.", ref: "references/crawlability.md#sitemaps", cluster: "sitemap" });
+    if (e.robots) checkRobots(add, e.robots, e.url, false, null);
+  }
+  // User-agent comparison against the base view
+  const byUrl = new Map();
+  for (const v of variants) { if (!byUrl.has(v.url)) byUrl.set(v.url, []); byUrl.get(v.url).push(v); }
+  for (const [url, vs] of byUrl) {
+    if (vs.length < 2) continue;
+    const base = vs[0];
+    const outside = vs.filter((v) => v.facts.title && !v.facts.titleInHead).map((v) => v.uaKey);
+    const inside = vs.filter((v) => v.facts.title && v.facts.titleInHead).map((v) => v.uaKey);
+    if (outside.length) {
+      const aiOutside = outside.filter((u) => !["googlebot", "browser", "bingbot"].includes(u));
+      add({
+        id: "LIVE-UA-STREAM", pillar: "geo", severity: aiOutside.length ? "medium" : "low", confidence: "certain", file: url,
+        message: `<title> arrives after </head> for: ${outside.join(", ")}${inside.length ? `; inside <head> for: ${inside.join(", ")}` : ""}. Googlebot renders JavaScript so Google is unaffected; non-rendering fetchers that only read <head> (${aiOutside.join(", ") || "none in this run"}) miss the title/description.`,
+        fix: "Next.js: set htmlLimitedBots to the default pattern plus the AI crawler tokens (it replaces the default list), or prerender the route (generateStaticParams / 'use cache').",
+        ref: "references/stack-nextjs.md#streaming-metadata-and-ai-crawlers", cluster: "next-config",
+      });
+    }
+    for (const v of vs.slice(1)) {
+      if (v.status !== base.status) add({ id: "LIVE-UA-STATUS", pillar: "geo", severity: "high", confidence: "certain", file: `${url} [${v.uaKey}]`, message: `${v.uaKey} gets HTTP ${v.status}, ${base.uaKey} gets ${base.status}. A WAF/bot rule treats them differently (a spoofed UA is not the real bot; confirm in server/WAF logs).`, fix: "Check CDN/WAF bot rules against the intended crawler policy.", ref: "references/geo-ai-search.md#crawler-policy", cluster: "waf" });
+      else if (base.facts.words > 100 && v.facts.words < base.facts.words * 0.5) add({ id: "LIVE-UA-CONTENT", pillar: "geo", severity: "high", confidence: "certain", file: `${url} [${v.uaKey}]`, message: `${v.uaKey} receives ${v.facts.words} words vs ${base.facts.words} for ${base.uaKey}.`, fix: "Serve the same server-rendered content to every crawler (differences can also look like cloaking).", ref: "references/geo-ai-search.md#crawler-policy", cluster: "waf" });
+    }
+  }
+  const streamed = new Set(more.filter((f) => f.id === "LIVE-UA-STREAM").map((f) => new URL(f.file).pathname));
+  const all = [...findings.filter((f) => !(f.id === "HTML-TITLE-BODY" && streamed.has(f.file))), ...more].sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity) || a.id.localeCompare(b.id));
+  return {
+    scanner: { name: "seo-scan", version: SCANNER_VERSION, mode: "fetch" },
+    userAgents: uas,
+    pages: variants.concat(pages.filter((p) => p.probe)).map((p) => ({ label: p.label, ua: p.uaKey || null, status: p.status, location: p.location || null, title: p.facts.title, titleInHead: p.facts.titleInHead, canonicals: p.facts.canonicals, words: p.facts.words, xRobotsTag: p.headers ? p.headers["x-robots-tag"] || null : null })),
+    files: extra.map(({ robots, ...rest }) => rest),
+    findings: all,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Reporting
+// ---------------------------------------------------------------------------
+
+export function summarize(findings) {
+  const bySeverity = Object.fromEntries(SEVERITY_ORDER.map((s) => [s, 0]));
+  const byPillar = {};
+  const clusters = new Map();
+  for (const f of findings) {
+    bySeverity[f.severity]++;
+    byPillar[f.pillar] = (byPillar[f.pillar] || 0) + 1;
+    if (!clusters.has(f.cluster)) clusters.set(f.cluster, []);
+    clusters.get(f.cluster).push(f.id);
+  }
+  const topClusters = [...clusters.entries()].filter(([, ids]) => ids.length > 1).sort((a, b) => b[1].length - a[1].length).slice(0, 8).map(([cluster, ids]) => ({ cluster, findings: ids.length, ids: [...new Set(ids)] }));
+  return { total: findings.length, bySeverity, byPillar, topClusters };
+}
+
+export function toMarkdown(result) {
+  const lines = [];
+  const s = summarize(result.findings);
+  lines.push(`# seo-scan (${result.scanner.mode})`);
+  if (result.stack) {
+    const st = result.stack;
+    lines.push("", `**Stack:** ${st.framework} (${st.variant || "?"}), ${st.language}, rendering: ${st.rendering.mode}, metadata: ${st.metadataLib || "?"}`);
+    lines.push(`**Versions:** ${Object.entries(st.versions).map(([k, v]) => `${k}@${v}`).join(", ") || "none found"}`);
+    if (st.docs) lines.push(`**Docs for this version:** ${st.docs.localAvailable ? st.docs.local + " (installed, version-matched)" : st.docs.online}`);
+    for (const n of st.notes) lines.push(`> ${n}`);
+    lines.push(`**Routes:** ${result.routes.length} (${result.routes.filter((r) => !r.private).length} public-looking)`);
+  }
+  lines.push("", `**Findings:** ${s.total} | ${SEVERITY_ORDER.map((k) => `${k}: ${s.bySeverity[k]}`).join(" | ")}`);
+  if (s.topClusters.length) lines.push("", "**Shared root causes (fix once, close many):** " + s.topClusters.map((c) => `${c.cluster} (${c.findings})`).join(", "));
+  lines.push("", "| Sev | ID | Pillar | Where | Finding | Conf. |", "|---|---|---|---|---|---|");
+  for (const f of result.findings) {
+    const where = f.file ? `${f.file}${f.line ? `:${f.line}` : ""}` : "";
+    lines.push(`| ${f.severity} | ${f.id} | ${f.pillar} | ${where.replace(/\|/g, "\\|")} | ${f.message.replace(/\|/g, "\\|").replace(/\n/g, " ")} | ${f.confidence} |`);
+  }
+  if (result.coverage) {
+    lines.push("", "**Not covered by this static pass:** " + [...result.coverage.needsRenderedHtml.map((x) => `${x} (run html/fetch)`), ...result.coverage.notAssessable.map((x) => `${x} (needs external data)`)].join("; "));
+  }
+  return lines.join("\n");
+}
