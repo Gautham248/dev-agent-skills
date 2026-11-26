@@ -213,6 +213,42 @@ The skill opts into `graph-memory` (a review has an honest completion point — 
 
 **One real bug found and fixed during test-writing, not shipped:** an early path-traversal test asserted the sanitized session-ID filename must never contain the literal substring `..`, which is the wrong property — the sanitizer strips path separators (what actually prevents traversal) but allows literal dots through for ordinary filenames, so `../../etc` correctly becomes a harmless single-segment filename that still contains `..` as inert text. Fixed to check the actual safety property (resolved path cannot escape `repoRoot`; result is always a single file, never a subdirectory) instead of a substring heuristic that would have been wrong in both directions.
 
+## `appstore-submission-guide` added, plus `companion-of` companion skills
+
+**Before:** `apple-appstore-reviewer`, imported from `github/awesome-copilot` and tracked in
+`.skillsets.json`, only audited code for rejection risk. Nothing guided the App Store Connect
+submission itself, and the reviewer couldn't be extended in place: `skill-update` re-imports
+overwrite local edits.
+
+**After:**
+
+- **A new sibling skill, `appstore-submission-guide`.** It walks the App Store Connect form section
+  by section and drafts each field's value from the codebase, with evidence, then validates the
+  drafts with three stdlib Python scripts:
+  - `harvest_evidence.py` gathers the evidence from the iOS repo
+  - `validate_metadata.py` checks drafted metadata against Apple's limits and rules
+  - `check_screenshots.py` checks screenshot sizes, alpha and counts
+
+  The scripts have 54 tests. Its research covers about 30 Apple pages, with a snapshot dated
+  2026-11-26 (App Review Guidelines last updated 2026-10-16).
+- **Provenance flags.** Every fact in `references/` carries a source flag (verified, search-snippet,
+  secondary or open), and the skill checks Apple's pages for changes on every run.
+- **A new frontmatter key, `companion-of`.** `scripts/inject-companions.sh`, called by `setup.sh`,
+  writes a managed block into the target skill telling the agent to run the companion after the
+  target's report. The companion side owns the link, so the upstream reviewer never needs a hand
+  edit, and `skill-update` restores the block because it re-runs `setup.sh`.
+  - Tested with 9 `node:test` cases: idempotence, removal, two companions, a missing target, a
+    self-reference, re-import and placement.
+  - Added to skill-factory's `ALLOWED_FRONTMATTER_KEYS` and documented in `frontmatter-spec.md` and
+    `CONTRIBUTING.md`.
+
+**Known limitation, not new:** `skill-lib.mjs`'s `normalizeForHash` strips only the clarification
+block before hashing, so the companion block, like the self-improvement block before it, makes a
+refreshed reviewer show as "updated".
+
+**Plan:** `docs/plans/appstore-submission-guide-plan.md`, revised twice. The revisions are recorded
+in `.dev-agent/deviations/`.
+
 ---
 
 ## Current state snapshot (at time of writing)

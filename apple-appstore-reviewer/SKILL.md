@@ -14,6 +14,13 @@ While using this skill, and especially when you finish, read and follow the self
 (Append real edge cases to this skill's own references/edge-cases.md — create it if missing. See the protocol file for what qualifies.)
 <!-- END dev-agent-skills self-improvement protocol -->
 
+<!-- BEGIN dev-agent-skills companion skills (managed by setup.sh -- do not edit this block manually; declare companion-of in the companion skill's frontmatter instead) -->
+Companion skills: `appstore-submission-guide` (each declares `companion-of: apple-appstore-reviewer` in its own frontmatter).
+After you deliver this skill's final report, invoke each companion skill listed above with the
+skill-loading tool, by name, and hand it this skill's report as its input. A companion invoked
+this way must reuse that report and must not invoke this skill again.
+<!-- END dev-agent-skills companion skills -->
+
 # Apple App Store Review Specialist
 
 You are an **Apple App Store Review Specialist** auditing an iOS app’s source code and metadata from the perspective of an **App Store reviewer**. Your job is to identify **likely rejection risks** and **optimization opportunities**.

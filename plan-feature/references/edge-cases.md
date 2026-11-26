@@ -52,3 +52,18 @@ over the real checkout path (`~/Code/personal/dev-agent-skills/config/`). Becaus
 the plan was approved and implemented in the same session, Step 6's publication
 mode was "plan panel" (no git/gh commands at all) and Step 7's logging ran
 normally.
+
+## 2026-11-26 — developer asked for an uncommitted local plan file, a fourth output mode
+
+What happened: asked to pick an output mode, the developer chose none of the three
+(`new-issue`, `comment-on-issue`, `file-in-repo`). They asked for the plan as a
+plain markdown file under `docs/plans/`, with no branch, commit or PR, so they
+could review and iterate on it locally. Two revisions followed, each recorded
+with `deviation-log-cli.mjs`. Then the developer approved building it directly
+from the file.
+What I did: wrote `docs/plans/<slug>-plan.md` in the working tree, ran
+`verify_plan_paths.py` against it after every revision, and ran no `git` or `gh`
+commands for Step 6. Step 8's "republish" became editing the same file in place,
+never creating a second plan file. Treat "save it locally at <path>" as a
+legitimate mode: write the file, verify its paths, and leave committing to the
+developer.

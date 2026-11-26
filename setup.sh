@@ -322,6 +322,17 @@ sync_own_agents_md
 echo ""
 
 inject_protocol_pointers
+
+# ── Companion skills (companion-of frontmatter key) ──────────────────────────
+#
+# A skill can declare `companion-of: <target>` in its own frontmatter; this
+# writes a managed block into the target's SKILL.md telling the agent to run
+# the companion after the target finishes. The declaring side owns the link,
+# so an upstream-imported target never needs a hand edit — skill-update re-runs
+# this script, which re-injects the block. Runs after inject_protocol_pointers
+# so the block lands right after the protocol blocks. Logic lives in its own
+# script so it can be tested against fixtures without running all of setup.sh.
+bash "$SKILLS_DIR/scripts/inject-companions.sh" "$SKILLS_DIR"
 echo ""
 
 # ── OpenCode global config (permission + standing rules) ─────────────────────

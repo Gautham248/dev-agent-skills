@@ -1,0 +1,32 @@
+{
+  "kids_category": false,
+  "locales": {
+    "en-US": {
+      "name": "Trailhead",
+      "subtitle": "Plan offline hikes",
+      "promotional_text": "New: download whole regions for offline navigation.",
+      "description": "Trailhead plans hiking routes and keeps them available offline.\n\nFEATURES\n- Offline maps for downloaded regions\n- Elevation profiles\n\nTrailhead Pro is an auto-renewable subscription that unlocks offline regions. Terms of Use: https://example.com/terms. Privacy Policy: https://example.com/privacy.",
+      "keywords": "trail,map,gps,offline,route,elevation,outdoor,trek,backpacking,walking",
+      "whats_new": "Offline regions: download a whole national park before you leave signal.",
+      "support_url": "https://example.com/support",
+      "marketing_url": "https://example.com"
+    }
+  },
+  "app_review": {
+    "sign_in_required": true,
+    "demo_username": "<demo-username>",
+    "demo_password": "<demo-password>",
+    "contact_phone": "+1 4155550100",
+    "contact_email": "appreview@example.com",
+    "notes": "APP OVERVIEW\nTrailhead plans hikes and keeps maps offline. Freemium; Pro subscription unlocks offline regions.\n\nHOW TO REVIEW\n1. Sign in with the demo account above.\n2. Map tab > Download Region > Yosemite.\n3. Pro: Settings > Upgrade. Expired-subscription account: <expired-user> / <expired-password>.\n\nACCOUNT DELETION\nSettings > Account > Delete Account.\n\nTESTED ON\niPhone 16 Pro (iOS 26.1)."
+  },
+  "iap": [
+    {
+      "product_id": "com.example.trailhead.pro.monthly",
+      "reference_name": "Pro Monthly",
+      "display_name": "Trailhead Pro",
+      "description": "Offline regions and elevation data",
+      "review_notes": "Unlocks Map > Download Region. Use the sandbox account."
+    }
+  ]
+}

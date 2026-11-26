@@ -80,7 +80,25 @@ metadata:
 
 ## Nothing else is allowed
 
-Any key outside `name`, `description`, `license`, `compatibility`, `allowed-tools`, `session-memory`, `metadata` should be treated as a mistake, not a creative extension — the parser only recognizes this set.
+## `companion-of` — optional
+
+A skill name, or a comma-separated list of names, in this repo. It declares this skill a
+**companion** of each target. `setup.sh` (via `scripts/inject-companions.sh`) then writes a managed
+block into each target's `SKILL.md`, telling the agent to invoke this skill after the target delivers
+its final report.
+
+- **The declaring side owns the link.** Use it when the target is a skill you can't or shouldn't
+  edit, such as one imported from an upstream skillset that `skill-update` overwrites. The block is
+  re-injected on every `setup.sh` run.
+- **The companion must not invoke its target back** when it was handed the target's report. Write
+  that loop guard into the companion's own body.
+- **Validation:** a name that isn't a skill, or the skill's own name, is warned about and ignored.
+
+## Nothing else is allowed
+
+Any key outside `name`, `description`, `license`, `compatibility`, `allowed-tools`, `session-memory`,
+`graph-memory`, `companion-of` and `metadata` should be treated as a mistake, not a creative
+extension. The parser only recognizes this set.
 
 
 ## File-level rules that aren't frontmatter but break things just as badly

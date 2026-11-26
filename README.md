@@ -9,6 +9,7 @@ in your AI IDE instantly.
 | Skill | What it does |
 |---|---|
 | [`apple-appstore-reviewer`](./apple-appstore-reviewer/) | Serves as a reviewer of the codebase with instructions on looking for Apple App Store optimizations or reject… |
+| [`appstore-submission-guide`](./appstore-submission-guide/) | Guides an iOS or iPadOS developer through the whole App Store Connect submission and drafts paste-ready value… |
 | [`architecture-context`](./architecture-context/) | Use to answer "what kind of system is this project, architecturally" -- not "what does this diff do" (that's… |
 | [`better-auth-conventions`](./better-auth-conventions/) | Better Auth conventions grounded in the official documentation (better-auth.com/docs), fetched and read direc… |
 | [`cloudkit-conventions`](./cloudkit-conventions/) | CloudKit framework conventions grounded in Apple's official documentation and WWDC guidance (developer.apple.… |

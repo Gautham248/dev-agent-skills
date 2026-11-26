@@ -163,6 +163,27 @@ fully catch (see `05-TROUBLESHOOTING.md`). Full mechanism in
 authoring guidance in
 [`03-MANAGING-SKILLS.md`](./03-MANAGING-SKILLS.md#opting-into-graph-memory).
 
+## Companion skills (opt-in, declared by the companion)
+
+Use this when your skill should **run automatically after another skill finishes**, especially one
+you can't edit, such as a skill imported from an upstream skillset that `skill-update` overwrites.
+
+Add `companion-of: <target-skill>` to **your** skill's frontmatter. A comma-separated list is fine.
+On the next `bash setup.sh`, `scripts/inject-companions.sh` writes a managed block into the target's
+`SKILL.md`, right after its protocol blocks. That block tells the agent to invoke your skill, with the
+target's report, once the target finishes. `skill-update` re-runs `setup.sh` after every re-import,
+so the block survives upstream refreshes. The exception is running it with `--skip-setup`: the block
+stays missing until `setup.sh` is run.
+
+Your skill must not invoke the target back when it was handed the target's report. Put that loop
+guard in your own body. The rest is handled for you:
+
+- Removing the key removes the block on the next run.
+- Two companions of one target share one block.
+- A target that isn't a skill, or a self-reference, is warned about and ignored.
+
+Example: `appstore-submission-guide` declares `companion-of: apple-appstore-reviewer`.
+
 ## Installing an existing skillset
 
 If the skill (or set of skills) you want already exists in another repo —

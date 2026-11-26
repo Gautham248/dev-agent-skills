@@ -24,7 +24,8 @@ except ImportError:
     yaml = None
 
 ALLOWED_FRONTMATTER_KEYS = {
-    "name", "description", "license", "compatibility", "allowed-tools", "session-memory", "graph-memory", "metadata"
+    "name", "description", "license", "compatibility", "allowed-tools", "session-memory", "graph-memory",
+    "companion-of", "metadata"
 }
 
 # Known dev-agent-skills roster, kept here so a fresh clone still gets a useful
