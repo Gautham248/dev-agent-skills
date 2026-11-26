@@ -16,9 +16,11 @@ While using this skill, and especially when you finish, read and follow the self
 
 <!-- BEGIN dev-agent-skills companion skills (managed by setup.sh -- do not edit this block manually; declare companion-of in the companion skill's frontmatter instead) -->
 Companion skills: `appstore-submission-guide` (each declares `companion-of: apple-appstore-reviewer` in its own frontmatter).
-After you deliver this skill's final report, invoke each companion skill listed above with the
-skill-loading tool, by name, and hand it this skill's report as its input. A companion invoked
-this way must reuse that report and must not invoke this skill again.
+After you deliver this skill's final report, load the companion skill by name (with its SKILL.md)
+and hand it this skill's report as its input, starting with this line:
+`handoff: from=apple-appstore-reviewer; reviewed_at=<ISO 8601 time>; commit=<git rev-parse HEAD, or unknown>`
+The companion decides whether to continue (it asks the user, and stops when no one can answer).
+A companion invoked this way must reuse that report and must not invoke this skill again.
 <!-- END dev-agent-skills companion skills -->
 
 # Apple App Store Review Specialist

@@ -80,25 +80,61 @@ def read_png(data):
     return width, height, has_alpha
 
 
-def read_jpeg(data):
-    """Return (width, height, False) or None."""
+def _exif_orientation(seg):
+    """Orientation (1-8) from an APP1 Exif payload, or None."""
+    if not seg.startswith(b"Exif\x00\x00"):
+        return None
+    tiff = seg[6:]
+    if tiff[:2] == b"II":
+        end = "<"
+    elif tiff[:2] == b"MM":
+        end = ">"
+    else:
+        return None
+    try:
+        ifd = struct.unpack(end + "I", tiff[4:8])[0]
+        count = struct.unpack(end + "H", tiff[ifd:ifd + 2])[0]
+        for i in range(count):
+            entry = tiff[ifd + 2 + 12 * i: ifd + 14 + 12 * i]
+            tag = struct.unpack(end + "H", entry[:2])[0]
+            if tag == 0x0112:
+                return struct.unpack(end + "H", entry[8:10])[0]
+    except struct.error:
+        return None
+    return None
+
+
+def jpeg_details(data):
+    """Return {'width', 'height', 'components', 'orientation'} or None. Width and height are as
+    displayed: EXIF orientations 5-8 rotate the image 90 degrees, so they are swapped."""
     if data[:2] != b"\xff\xd8":
         return None
-    pos = 2
+    pos, orientation = 2, None
     while pos + 4 <= len(data):
         if data[pos] != 0xFF:
             pos += 1
             continue
         marker = data[pos + 1]
-        if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
-            pos += 2
+        if marker in (0xD8, 0x01, 0xFF) or 0xD0 <= marker <= 0xD7:
+            pos += 1 if marker == 0xFF else 2
             continue
         length = struct.unpack(">H", data[pos + 2:pos + 4])[0]
+        if marker == 0xE1 and orientation is None:
+            orientation = _exif_orientation(data[pos + 4:pos + 2 + length])
         if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
             height, width = struct.unpack(">HH", data[pos + 5:pos + 9])
-            return width, height, False
+            components = data[pos + 9]
+            if orientation in (5, 6, 7, 8):
+                width, height = height, width
+            return {"width": width, "height": height, "components": components, "orientation": orientation}
         pos += 2 + length
     return None
+
+
+def read_jpeg(data):
+    """Return (width, height, False) or None. Dimensions honour EXIF orientation."""
+    d = jpeg_details(data)
+    return (d["width"], d["height"], False) if d else None
 
 
 def image_info(path):
@@ -132,6 +168,12 @@ def check(root, ipad=False):
             add("error", rel, "Not a readable PNG/JPEG (extension does not match content?).")
             continue
         w, h, alpha = info
+        jd = jpeg_details(path.read_bytes()) if path.suffix.lower() in (".jpg", ".jpeg") else None
+        if jd and jd["components"] == 4:
+            add("warning", rel, "CMYK JPEG: convert to RGB (sRGB or Display P3) before uploading.")
+        if jd and jd["orientation"] in (5, 6, 7, 8):
+            add("warning", rel, f"EXIF orientation {jd['orientation']} rotates this image; checked as {w}x{h}. "
+                                f"Re-export without the rotation flag to be safe.")
         if alpha:
             add("error", rel, "Has an alpha channel/transparency; App Store Connect rejects it. Flatten it.")
         declared = class_from_path(path, root)

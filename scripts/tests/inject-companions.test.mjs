@@ -58,6 +58,8 @@ describe("inject-companions.sh", () => {
     assert.ok(target.indexOf("END dev-agent-skills clarification protocol") < target.indexOf(BEGIN));
     assert.ok(target.indexOf(BEGIN) < target.indexOf("# Body"));
     assert.equal(count(read(dir, "guide"), BEGIN), 0, "the companion itself gets no block");
+    assert.ok(target.includes("`handoff: from=reviewer; reviewed_at="), "block carries the handoff line");
+    assert.ok(!target.includes("ask the user which companion"), "a single companion is not a choice");
   });
 
   test("second run leaves the file byte-identical", () => {
@@ -86,6 +88,7 @@ describe("inject-companions.sh", () => {
     const target = read(dir, "reviewer");
     assert.equal(count(target, BEGIN), 1);
     assert.ok(target.includes("`guide`") && target.includes("`notes-helper`"));
+    assert.ok(target.includes("ask the user which companion skill to run"), "several companions are a choice");
   });
 
   test("a missing target warns and changes no file", () => {

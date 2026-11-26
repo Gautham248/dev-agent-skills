@@ -31,7 +31,7 @@ It never enters anything into App Store Connect and never edits app code.
 ## Scripts (Python 3 standard library, no installs)
 
 ```bash
-python3 scripts/harvest_evidence.py <app-repo> --regions EU,US,JP,FR   # evidence JSON
+python3 scripts/harvest_evidence.py <app-repo> --regions EU,US,JP,FR [--target <app target>]   # evidence JSON
 python3 scripts/validate_metadata.py <draft.json>                      # limits and guideline lint
 python3 scripts/check_screenshots.py <screenshots-dir> [--ipad]        # sizes, alpha, counts
 python3 -m unittest discover -s scripts/tests -v                       # the skill's own tests

@@ -1,5 +1,9 @@
 {
   "kids_category": false,
+  "is_update": true,
+  "version": "2.4.0",
+  "live_version": "2.3.1",
+  "copyright": "2026 Example, Inc.",
   "locales": {
     "en-US": {
       "name": "Trailhead",

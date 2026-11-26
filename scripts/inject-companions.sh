@@ -104,9 +104,16 @@ for skill_dir in "${skill_dirs[@]}"; do
       echo ""
       echo "$CB_BEGIN"
       echo "Companion skills: $list (each declares \`companion-of: $name\` in its own frontmatter)."
-      echo "After you deliver this skill's final report, invoke each companion skill listed above with the"
-      echo "skill-loading tool, by name, and hand it this skill's report as its input. A companion invoked"
-      echo "this way must reuse that report and must not invoke this skill again."
+      if [ "$(echo "$companions" | wc -w)" -gt 1 ]; then
+        echo "After you deliver this skill's final report, ask the user which companion skill to run, then load"
+        echo "it by name (with its SKILL.md) and hand it this skill's report as its input, starting with this line:"
+      else
+        echo "After you deliver this skill's final report, load the companion skill by name (with its SKILL.md)"
+        echo "and hand it this skill's report as its input, starting with this line:"
+      fi
+      echo "\`handoff: from=$name; reviewed_at=<ISO 8601 time>; commit=<git rev-parse HEAD, or unknown>\`"
+      echo "The companion decides whether to continue (it asks the user, and stops when no one can answer)."
+      echo "A companion invoked this way must reuse that report and must not invoke this skill again."
       echo "$CB_END"
       echo ""
       tail -n "+$((anchor + 1))" "$stripped"

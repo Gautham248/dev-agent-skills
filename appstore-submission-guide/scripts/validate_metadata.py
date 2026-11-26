@@ -41,9 +41,21 @@ PHONE_RE = re.compile(r"^\+\d[\d\s\-().]{5,}$")
 URL_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)
 
 PRICING_RE = re.compile(
-    r"\b(free|sale|discount(?:ed)?|cheap|bargain|deal)\b|\d+\s?%\s?off\b|[$€£¥₹]\s?\d",
+    r"\b(free|sale|discount(?:ed)?|cheap|bargain|deal"
+    # de, fr, es, it, pt, nl, nordic, pl, tr, ru
+    r"|kostenlos|gratis|umsonst|rabatt|angebot|gratuit|gratuite|promo|soldes|gratuito|gratuita|oferta|descuento"
+    r"|sconto|offerta|grátis|desconto|promoção|korting|ilmainen|darmowy|darmowa|ücretsiz|indirim"
+    r"|бесплатно|бесплатный|скидка)\b"
+    r"|\d+\s?%\s?(off|rabatt|de descuento|di sconto)\b|[$€£¥₹]\s?\d"
+    # CJK and Thai have no word boundaries: match the term anywhere
+    r"|無料|セール|割引|免费|免費|折扣|特价|特價|무료|할인|ฟรี",
     re.IGNORECASE,
 )
+# Apple documents ASCII commas as the keyword separator. Split on full-width and ideographic commas
+# too, so duplicates are still found, and warn that they may not separate keywords.
+KEYWORD_SEP_RE = re.compile(r"[,，、]")
+VERSION_RE = re.compile(r"^\d+(\.\d+){0,2}$")
+COPYRIGHT_RE = re.compile(r"^(©\s*)?\d{4}(\s*[-–]\s*\d{4})?\s+\S")
 OTHER_PLATFORM_RE = re.compile(
     r"\b(android|google play|play store|windows phone|huawei appgallery|galaxy store|amazon appstore)\b",
     re.IGNORECASE,
@@ -88,7 +100,10 @@ def check_length(report, where, value, min_c, max_c, max_b):
 def check_keywords(report, where, keywords, name, subtitle):
     if not keywords:
         return
-    parts = keywords.split(",")
+    if re.search(r"[，、]", keywords):
+        report.warn(where, "Separate keywords with ASCII commas, as Apple documents; '，' and '、' may be "
+                           "read as part of a keyword.")
+    parts = KEYWORD_SEP_RE.split(keywords)
     if any(p != p.strip() for p in parts):
         report.warn(where, "Spaces around commas waste bytes; use 'a,b,c'.")
     terms = [p.strip().lower() for p in parts]
@@ -107,8 +122,13 @@ def check_keywords(report, where, keywords, name, subtitle):
         report.warn(where, f"Repeats words already indexed from name/subtitle: {', '.join(repeated)}.")
 
 
-def validate_locale(report, locale, data, kids_category):
+def validate_locale(report, locale, data, kids_category, is_update=None):
     base = f"locales.{locale}"
+    if is_update is True and not (data.get("whats_new") or "").strip():
+        report.error(f"{base}.whats_new", "What's New is required when submitting an update.")
+    if is_update is False and data.get("whats_new"):
+        report.warn(f"{base}.whats_new", "What's New only appears for updates; it is not shown for a first "
+                                         "version. Leave it empty.")
     for field, (mn, mx, mb) in LOCALE_LIMITS.items():
         value = data.get(field)
         if value is None:
@@ -183,6 +203,25 @@ def validate_iap(report, index, iap):
         check_length(report, f"{where}.{field}", value, mn, mx, None)
 
 
+def version_key(v):
+    parts = [int(x) for x in v.split(".")]
+    return tuple(parts + [0] * (3 - len(parts)))
+
+
+def validate_version(report, draft):
+    version, live = draft.get("version"), draft.get("live_version")
+    for field, value in (("version", version), ("live_version", live)):
+        if value is not None and not VERSION_RE.match(str(value)):
+            report.error(field, f"'{value}' is not a valid version: up to three period-separated integers "
+                                f"(e.g. 2.4.1).")
+            return
+    if version and live and version_key(str(version)) <= version_key(str(live)):
+        report.error("version", f"Version {version} must be higher than the live version {live}.")
+    if draft.get("is_update") is True and version and not live:
+        report.warn("live_version", "Update submission without live_version; the 'higher than live' check "
+                                    "was skipped.")
+
+
 def validate(draft):
     report = Report()
     if not isinstance(draft, dict):
@@ -192,8 +231,17 @@ def validate(draft):
     locales = draft.get("locales") or {}
     if not locales:
         report.error("locales", "At least one locale (e.g. 'en-US') is required.")
+    is_update = draft.get("is_update")
     for locale, data in locales.items():
-        validate_locale(report, locale, data or {}, kids)
+        validate_locale(report, locale, data or {}, kids, is_update)
+    validate_version(report, draft)
+    copyright_ = draft.get("copyright")
+    if copyright_ is not None:
+        if re.search(r"https?://|www\.", copyright_, re.IGNORECASE):
+            report.error("copyright", "Don't put a URL in the copyright field.")
+        elif not COPYRIGHT_RE.match(copyright_.strip()):
+            report.warn("copyright", "Expected the year followed by the rights holder, e.g. "
+                                     "'2026 Example, Inc.'.")
     validate_review(report, draft.get("app_review") or {})
     for i, iap in enumerate(draft.get("iap") or []):
         validate_iap(report, i, iap)

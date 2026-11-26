@@ -54,8 +54,10 @@ removed. If the codebase can't prove it, write it as a question for the develope
 - Edit the app's code. Code fixes belong to `apple-appstore-reviewer`'s "next pass".
 - Invent a privacy-label, age-rating or encryption answer without evidence.
 - Present a dated value (a limit, a deadline, an SDK floor) without its date and source flag.
-- Re-invoke `apple-appstore-reviewer` when that skill's report was handed in, or already exists this
-  session. This guard stops the two skills from calling each other in a loop.
+- Re-invoke `apple-appstore-reviewer` when that skill's report was handed in, or a report for the
+  current commit already exists this session. This guard stops the two skills from calling each other
+  in a loop.
+- Write demo-account passwords, MFA secrets or contact details into any file or into session memory.
 
 ## How to treat a value from `references/`
 
@@ -75,8 +77,28 @@ Every reference file opens with its snapshot date: **2026-11-26**, App Review Gu
 
 ### Step 0: Decide whether to continue, then scope the walk
 
-**If the reviewer handed off to this skill,** ask one closed question first: "The review is done.
-Continue to the App Store submission walk, or stop here?" If the developer says stop, stop.
+**If the reviewer handed off to this skill,** its report starts with a handoff line:
+
+```
+handoff: from=apple-appstore-reviewer; reviewed_at=<ISO 8601>; commit=<git HEAD or "unknown">
+```
+
+Ask one closed question first: "The review is done. Continue to the App Store submission walk, or stop
+here?" If the developer says stop, stop. **If no one can answer** (a subagent, CI or any
+non-interactive run), stop at the review and print one line: "Run `appstore-submission-guide` to
+continue to the submission walk."
+
+**If a walk is already in progress this session** (session memory has completed sections) and the
+reviewer hands off again, for example after code fixes, resume the walk. Re-run only Step 2's verdict
+and the sections whose evidence changed; don't restart the interview.
+
+**Pick the mode before the interview:**
+
+- **Rejection response** (the developer pasted an App Review message, or says the app was rejected):
+  skip Steps 1-6 and go to Step 7.
+- **One section** (for example only the privacy labels or only the age rating): ask only the scope
+  questions that section needs, run Step 3, then walk that section alone.
+- **New app** or **update:** the full walk below.
 
 Then ask the scope questions below in a single message, as closed questions. If an answer is already
 clear from the conversation or the code, state it instead of asking.
@@ -129,8 +151,13 @@ dated value in the packet "as of 2026-11-26, verify". Never block on this step.
 
 ### Step 2: Compliance gate
 
-- **The reviewer's report was handed in, or already exists this session:** reuse it. **Do not invoke
-  `apple-appstore-reviewer` again.**
+- **The reviewer's report was handed in:** reuse it. **Do not invoke `apple-appstore-reviewer`
+  again.**
+- **A report already exists this session:** reuse it only if its `commit` matches the current
+  `git rev-parse HEAD` (or the developer confirms nothing changed). A report for an older commit is
+  stale: invoke the reviewer again.
+- **The report has no P0/P1/P2 severities you can parse:** show it, ask which findings block the
+  submission, and continue.
 - **Otherwise:** invoke `apple-appstore-reviewer` with the skill tool, wait for its report, then
   continue.
 
@@ -144,18 +171,23 @@ don't write a competing draft.
 `Info.plist`, entitlements, privacy manifests or dependencies since.
 
 ```bash
-python3 scripts/harvest_evidence.py <app-repo-root> --regions <comma-separated region codes>
+python3 scripts/harvest_evidence.py <app-repo-root> --regions <comma-separated region codes> [--target <name>]
 ```
 
 Region codes: `EU`, `US`, `JP`, `BR`, `AU`, `KR`, `CN`, `VN`, `FR`, `UK`, `EEA`.
 
 The script prints JSON:
 
-- **`app`:** bundle ID, version, deployment target.
+- **`app`:** the main app target, its configuration and xcconfig files, bundle ID, version, build
+  number and deployment targets. Values are resolved from build settings, `.xcconfig` files and
+  `$(VAR)` references for the Release configuration.
+- **`extensions`:** every other target (extensions, watch app, App Clip) with its bundle ID.
+- **`app_icon`:** the 1024x1024 App Store icon: format (`appiconset` or `icon_composer`) and issues.
 - **`export_compliance`:** the plist key, crypto libraries, and a suggested answer.
 - **`privacy_manifests`:** manifests found, plus SDKs that need a manifest but have none.
 - **`dependencies`:** the dependency list.
-- **`usage_descriptions`:** usage-description strings.
+- **`usage_descriptions`:** usage-description strings of the main app.
+- **`purpose_string_usage`:** code (or plugins) that needs a usage description, with evidence.
 - **`capabilities`:** entitlements and capabilities.
 - **`signals`:** sign-in, UGC, web views, location sharing, loot boxes, dating, social and
   age-assurance APIs.
@@ -164,7 +196,22 @@ The script prints JSON:
 Then open the specific files the JSON points to before drafting from them. The scripts show where to
 look; they don't replace reading the code.
 
-**If the script reports `not_an_ios_project`,** say so and ask for the right path. Don't guess.
+**Other statuses:**
+
+- **`needs_target_selection`:** several iOS app targets. Ask which one is being submitted (closed
+  question listing `candidates`), then re-run with `--target`.
+- **`target_not_found`:** the `--target` name doesn't exist; offer the listed candidates.
+- **`generated_project`:** Expo, React Native, Flutter, Capacitor, XcodeGen, Tuist, Unity or .NET MAUI
+  with no committed Xcode project. Show the `message` (how to generate it). If the developer doesn't
+  want to, draft from `config` and the config files, and mark every value "verify".
+- **`not_an_ios_project`:** say so and ask for the right path. Don't guess.
+
+**Flags that block the upload** go in the packet as `fix first`: `purpose_string_missing`,
+`app_icon_has_alpha`, `app_icon_1024_missing`, `deployment_target_below_13`,
+`required_reason_api_undeclared`. **Flags that need a decision:** `bundle_id_unresolved`,
+`purpose_string_only_in_extension`, `tracking_manifest_mismatch`, `app_icon_not_found`.
+**`bundled_watch_app`, `bundled_app_clip`, `bundled_imessage`:** list the extra assets as "not covered
+by this skill" in the asset checklist.
 
 ### Step 4: Walk the submission form, in App Store Connect order
 
@@ -275,8 +322,9 @@ section.
   harvest from a guessed directory.
 - **A Flutter, React Native or Capacitor app:** look for `ios/Runner/Info.plist` or
   `ios/<App>/Info.plist`. The script searches these paths.
-- **Several app targets** (app, extensions, App Clip): draft for the main app target. List extension
-  manifests and usage strings under the main app, because extensions ship in the same build.
+- **Several app targets:** the script returns `needs_target_selection`; ask, then re-run with
+  `--target`. Extensions, the watch app and the App Clip are listed under `extensions`; their
+  manifests ship in the same build.
 - **Apple's pages conflict** (screenshot required class, IAP name limits, review times): say so and
   recommend the option that satisfies both readings. Never silently pick one. Details are in
   `references/sources.md`.
